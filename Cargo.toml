@@ -1,0 +1,31 @@
+[package]
+name = "robinhood-chain"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Robinhood Chain API SDK (EVM, chain id 4663) — KOL trade intelligence, token discovery & launch-bundle detection, deployer reputation, and the DEX trade tape. Same msk_ key, bundled into every MadeOnSol tier at https://madeonsol.com/pricing"
+license = "MIT"
+repository = "https://github.com/madeonsol/robinhood-chain-rs"
+homepage = "https://madeonsol.com/robinhood"
+documentation = "https://docs.rs/robinhood-chain"
+readme = "README.md"
+keywords = ["robinhood-chain", "rhc", "evm", "sdk", "kol"]
+categories = ["api-bindings", "web-programming::http-client"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[example]]
+name = "kol_feed"
+path = "examples/kol_feed.rs"
+
+[[example]]
+name = "deployer_leaderboard"
+path = "examples/deployer_leaderboard.rs"
