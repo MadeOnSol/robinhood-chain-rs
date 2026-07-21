@@ -13,7 +13,9 @@ Typed, async, `tokio`-based, `rustls`-only client for the [MadeOnSol](https://ma
 
 Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `token_address` (lowercase `0x…`), `eth_amount`, `tx_hash`, `block_number`, `net_flow_eth`. No Solana field names.
 
-> Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** — same `msk_` API key, same base URL (`https://madeonsol.com/api/v1`). Get a free key at **<https://madeonsol.com/developer>**.
+> Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** — same `msk_` API key, same base URL (`https://madeonsol.com/api/v1`). Get a free key at **<https://madeonsol.com/pricing>**.
+
+New customers get a **5-day free trial** of Pro or Ultra when you pay by card — full access, nothing charged during the trial, cancel anytime. Start at [madeonsol.com/pricing](https://madeonsol.com/pricing).
 
 ## Install
 
@@ -32,7 +34,7 @@ use robinhood_chain::{RobinhoodChain, types::{KolFeedParams, TradeAction}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Free key — RHC is bundled into every tier. https://madeonsol.com/developer
+    // Free key — RHC is bundled into every tier. https://madeonsol.com/pricing
     let client = RobinhoodChain::new(std::env::var("MADEONSOL_API_KEY")?)?;
 
     let feed = client.kol.feed(&KolFeedParams {
@@ -140,7 +142,7 @@ match client.tokens.get("0xnot_a_token").await {
 - Robinhood Chain overview — <https://madeonsol.com/robinhood>
 - Pricing & tiers — <https://madeonsol.com/pricing>
 - Full API reference — <https://madeonsol.com/api-docs>
-- Get a free API key — <https://madeonsol.com/developer>
+- Get a free API key — <https://madeonsol.com/pricing>
 
 ## License
 
