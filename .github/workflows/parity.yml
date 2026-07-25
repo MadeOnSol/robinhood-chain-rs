@@ -1,5 +1,5 @@
 name: parity
-# Fails if this SDK drifts from the 14 documented Robinhood Chain (chain 4663)
+# Fails if this SDK drifts from the 25 documented Robinhood Chain (chain 4663)
 # API routes — either references a path that isn't one of them, or stops covering
 # one. Node-based, needs no cargo. This standalone crate is not scanned by the
 # monorepo's SDK route-parity guard, so it ships its own.
@@ -16,5 +16,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Check SDK paths against the 14 RHC routes
+      - name: Check SDK paths against the 25 RHC routes
         run: node scripts/route-parity-check.mjs

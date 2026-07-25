@@ -12,9 +12,10 @@
 //! ## Get an API key
 //!
 //! Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** —
-//! same `msk_` key, same base URL. Get a free key at <https://madeonsol.com/developer>.
+//! same `msk_` key, same base URL. Get a free key at <https://madeonsol.com/pricing>.
 //! Paid tiers (PRO / ULTRA) unlock the DEX trade tape, token discovery, candles,
-//! KOL-consensus, alpha-wallet ranking, and WebSocket streaming — see
+//! KOL-consensus, alpha-wallet ranking, and WebSocket streaming — and new customers
+//! get a **3-day free trial** of Pro or Ultra when paying by card. See
 //! <https://madeonsol.com/pricing>.
 //!
 //! ## Quick start
@@ -42,10 +43,10 @@
 //!
 //! ## Namespaces
 //!
-//! - [`RobinhoodChain::kol`] — KOL feed, leaderboard, consensus hot-tokens, single-KOL profile
+//! - [`RobinhoodChain::kol`] — KOL feed, leaderboard, consensus hot-tokens, coordination, first-touches, single-KOL profile
 //! - [`RobinhoodChain::trades`] — the DEX trade tape (PRO+)
-//! - [`RobinhoodChain::tokens`] — token discovery, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle
-//! - [`RobinhoodChain::deployer_hunter`] — deployer reputation leaderboard + single-deployer profile
+//! - [`RobinhoodChain::tokens`] — token discovery, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle, batch reads
+//! - [`RobinhoodChain::deployer_hunter`] — deployer reputation: leaderboard, profile, trajectory, launch history, best-tokens, stats, alerts, recent graduations
 //! - [`RobinhoodChain::alpha_wallets`] — smart-money wallet ranking (PRO+)
 //! - [`RobinhoodChain::stream`] — WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels
 //!
@@ -92,13 +93,16 @@ pub use crate::error::RobinhoodChainError as Error;
 /// ```
 #[derive(Debug, Clone)]
 pub struct RobinhoodChain {
-    /// KOL trade intelligence: feed, leaderboard, consensus hot-tokens, profile.
+    /// KOL trade intelligence: feed, leaderboard, consensus hot-tokens,
+    /// coordination, first-touches, profile.
     pub kol: Kol,
     /// The Robinhood Chain DEX trade tape (PRO+).
     pub trades: Trades,
-    /// Token intelligence: discovery, snapshot, candles, KOL-consensus, buyer-quality, bundle.
+    /// Token intelligence: discovery, snapshot, candles, KOL-consensus,
+    /// buyer-quality, bundle, and the two batch reads.
     pub tokens: Tokens,
-    /// Deployer reputation leaderboard + single-deployer profile.
+    /// Deployer reputation: leaderboard, profile, trajectory, launch history,
+    /// best-tokens, chain-wide stats, alerts, recent graduations.
     pub deployer_hunter: DeployerHunter,
     /// Smart-money wallet ranking (PRO+).
     pub alpha_wallets: AlphaWallets,
@@ -110,7 +114,7 @@ impl RobinhoodChain {
     /// Construct a new client.
     ///
     /// `api_key` must start with `msk_`. Robinhood Chain coverage is bundled into
-    /// every tier — get a free key at <https://madeonsol.com/developer>.
+    /// every tier — get a free key at <https://madeonsol.com/pricing>.
     ///
     /// # Errors
     ///
@@ -121,7 +125,7 @@ impl RobinhoodChain {
         if !api_key.starts_with("msk_") {
             eprintln!(
                 "\n[robinhood-chain] Missing or invalid API key.\n\
-                 → Get a free key at https://madeonsol.com/developer (RHC bundled into every tier)\n\
+                 → Get a free key at https://madeonsol.com/pricing (RHC bundled into every tier)\n\
                  → Then: robinhood_chain::RobinhoodChain::new(std::env::var(\"MADEONSOL_API_KEY\")?)?\n"
             );
             return Err(RobinhoodChainError::MissingApiKey);

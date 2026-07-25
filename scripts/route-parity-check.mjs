@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * route-parity-check.mjs — fails CI if this SDK drifts from the 14 documented
+ * route-parity-check.mjs — fails CI if this SDK drifts from the 25 documented
  * Robinhood Chain API routes.
  *
  * This standalone crate is NOT scanned by the monorepo's sdk-route-parity guard,
- * so it ships its own. The 14 `/rhc/*` routes are pinned below (from the
- * "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
+ * so it ships its own. The 25 `/rhc/*` routes (23 GET + 2 batch POST) are pinned
+ * below (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
  *
- *   1. Every `/rhc/*` path literal in src/ MUST resolve to one of the 14 routes.
- *   2. All 14 routes MUST be referenced by the client (coverage).
+ *   1. Every `/rhc/*` path literal in src/ MUST resolve to one of the 25 routes.
+ *   2. All 25 routes MUST be referenced by the client (coverage).
  *
  * Non-`/rhc/*` infra paths (WebSocket-token issuance under /stream/*) are
  * allow-listed — they are shared endpoints, not RHC-specific.
@@ -22,11 +22,13 @@ import path from "node:path";
 
 const SRC = process.env.SRC_DIR || "src";
 
-// The 14 documented Robinhood Chain routes, normalized ({param} -> :p).
+// The 25 documented Robinhood Chain routes, normalized ({param} -> :p).
 const RHC_ROUTES = [
   "/rhc/kol/feed",
   "/rhc/kol/leaderboard",
   "/rhc/kol/hot-tokens",
+  "/rhc/kol/coordination",
+  "/rhc/kol/first-touches",
   "/rhc/kol/:p",
   "/rhc/trades",
   "/rhc/tokens",
@@ -35,8 +37,17 @@ const RHC_ROUTES = [
   "/rhc/tokens/:p/kol-consensus",
   "/rhc/tokens/:p/buyer-quality",
   "/rhc/tokens/:p/bundle",
+  "/rhc/token/batch",
+  "/rhc/tokens/batch/buyer-quality",
   "/rhc/deployer-hunter/leaderboard",
+  "/rhc/deployer-hunter/alerts",
+  "/rhc/deployer-hunter/best-tokens",
+  "/rhc/deployer-hunter/recent-bonds",
+  "/rhc/deployer-hunter/stats",
   "/rhc/deployer-hunter/:p",
+  "/rhc/deployer-hunter/:p/trajectory",
+  "/rhc/deployer-hunter/:p/tokens",
+  "/rhc/deployer-hunter/:p/history",
   "/rhc/alpha-wallets",
 ];
 const ROUTES = new Set(RHC_ROUTES);
@@ -102,7 +113,7 @@ const uniqProblems = [...new Set(problems)];
 let failed = false;
 if (uniqProblems.length) {
   failed = true;
-  console.error(`\n❌ route-parity: ${uniqProblems.length} SDK path(s) not among the 14 RHC routes:\n  ${uniqProblems.join("\n  ")}\n`);
+  console.error(`\n❌ route-parity: ${uniqProblems.length} SDK path(s) not among the ${RHC_ROUTES.length} RHC routes:\n  ${uniqProblems.join("\n  ")}\n`);
 }
 if (missing.length) {
   failed = true;
@@ -110,4 +121,4 @@ if (missing.length) {
 }
 if (failed) process.exit(1);
 
-console.log(`✅ route-parity: all ${seen.size}/14 RHC routes covered; ${count} path literals resolve.`);
+console.log(`✅ route-parity: all ${seen.size}/${RHC_ROUTES.length} RHC routes covered; ${count} path literals resolve.`);

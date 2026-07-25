@@ -43,6 +43,23 @@ impl HttpCore {
         Self::handle(resp).await
     }
 
+    pub(crate) async fn post<T, B>(&self, path: &str, body: &B) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize + ?Sized,
+    {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .header("Accept", "application/json")
+            .json(body)
+            .send()
+            .await?;
+        Self::handle(resp).await
+    }
+
     pub(crate) async fn post_empty<T>(&self, path: &str) -> Result<T>
     where
         T: DeserializeOwned,

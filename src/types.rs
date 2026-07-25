@@ -5,6 +5,8 @@
 //! `net_flow_eth`. Field names mirror the JSON wire format exactly so you can paste
 //! API examples straight from the docs at <https://madeonsol.com/api-docs>.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 // ─── Shared enums ────────────────────────────────────────────────────────────
@@ -117,6 +119,15 @@ impl TokensSort {
 }
 
 /// Deployer reputation tier (filter + response value).
+///
+/// ⚠️ Tier semantics (migrations 267 + 269): `Elite` and `Good` are earned on the
+/// $100K `runner_rate` and require 24h of deployer history — the $40K
+/// graduation bar proved farmable by operators mass-relaunching one ticker
+/// across rotating wallets. `graduation_rate` is still returned and still means
+/// the $40K bar, but it NO LONGER sets the tier; `Spammer` is the one exception
+/// that still keys off it. Call
+/// [`DeployerHunter::stats`](crate::api::deployer_hunter::DeployerHunter::stats)
+/// for the live thresholds.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DeployerTier {
@@ -270,6 +281,129 @@ pub enum QualitySignal {
 pub enum BundleKind {
     SameBlock,
     None,
+}
+
+/// Window for the reputable-deployer best-tokens ranking.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BestTokensPeriod {
+    #[serde(rename = "24h")]
+    H24,
+    #[serde(rename = "7d")]
+    D7,
+    #[serde(rename = "30d")]
+    D30,
+    #[serde(rename = "all")]
+    All,
+}
+
+impl BestTokensPeriod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::H24 => "24h",
+            Self::D7 => "7d",
+            Self::D30 => "30d",
+            Self::All => "all",
+        }
+    }
+}
+
+/// Ordering for one deployer's paginated launch history.
+///
+/// `PeakMcUsd` is a **page-scoped** sort — peak MC lives in another table and is
+/// applied after enrichment of the requested page only, so it is not a global
+/// "top tokens by peak MC" ranking. Use
+/// [`DeployerHunter::best_tokens`](crate::api::deployer_hunter::DeployerHunter::best_tokens)
+/// for a real ranking.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployerTokensSort {
+    FirstSeenAt,
+    PeakMcUsd,
+}
+
+impl DeployerTokensSort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FirstSeenAt => "first_seen_at",
+            Self::PeakMcUsd => "peak_mc_usd",
+        }
+    }
+}
+
+/// Rolling window for KOL coordination.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CoordinationPeriod {
+    #[serde(rename = "1h")]
+    H1,
+    #[serde(rename = "6h")]
+    H6,
+    #[serde(rename = "24h")]
+    H24,
+    #[serde(rename = "7d")]
+    D7,
+}
+
+impl CoordinationPeriod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::H1 => "1h",
+            Self::H6 => "6h",
+            Self::H24 => "24h",
+            Self::D7 => "7d",
+        }
+    }
+}
+
+/// Deployer-alert kind. Robinhood Chain has no `bonded`/`kol_buy` alerts — most
+/// launchpads are direct-to-DEX and alerts carry no KOL join.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployerAlertType {
+    NewDeploy,
+    Graduated,
+}
+
+impl DeployerAlertType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NewDeploy => "new_deploy",
+            Self::Graduated => "graduated",
+        }
+    }
+}
+
+/// Deployer-alert priority. Robinhood Chain has no `low` priority.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeployerAlertPriority {
+    High,
+    Medium,
+}
+
+impl DeployerAlertPriority {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+        }
+    }
+}
+
+/// Direction of a KOL cohort's in-window flow on a coordination row.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CoordinationSignal {
+    Accumulating,
+    Distributing,
+}
+
+/// Direction of a deployer's launch quality over time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TrajectoryTrend {
+    Improving,
+    Declining,
+    Stable,
 }
 
 // ─── KOL: feed ───────────────────────────────────────────────────────────────
@@ -482,6 +616,186 @@ pub struct KolProfileResponse {
     /// tx_hash, traded_at). Left as raw JSON — shape is not schema-pinned upstream.
     #[serde(default)]
     pub trades: Vec<serde_json::Value>,
+}
+
+// ─── KOL: coordination ───────────────────────────────────────────────────────
+
+/// Query parameters for
+/// [`Kol::coordination`](crate::api::kol::Kol::coordination).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CoordinationParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<CoordinationPeriod>,
+    /// Minimum distinct KOL buyers for a token to qualify (2..=50, default 2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_kols: Option<u32>,
+    /// Max tokens (1..=50, default 20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Minimum market cap at the FIRST KOL buy (USD). Tokens with an unknown
+    /// entry MC are excluded whenever a band is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<f64>,
+    /// Maximum market cap at the first KOL buy (USD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<f64>,
+}
+
+/// One KOL's leg of a coordination cohort.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationKol {
+    pub evm_address: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub twitter_url: Option<String>,
+    pub buy_eth: f64,
+    pub sell_eth: f64,
+    /// True when this KOL sold more ETH than it bought in the window.
+    pub exited: bool,
+}
+
+/// A token bought by N+ distinct KOLs in the window, with cohort composition.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationToken {
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub deployer_tier: Option<String>,
+    #[serde(default)]
+    pub token_age_minutes: Option<i64>,
+    /// Distinct KOL buyers in the window.
+    pub kol_count: i64,
+    pub total_buys: i64,
+    pub buy_eth: f64,
+    pub sell_eth: f64,
+    /// `buy_eth − sell_eth` over the window.
+    pub net_eth: f64,
+    pub signal: CoordinationSignal,
+    /// KOLs that sold more than they bought.
+    pub exited_count: i64,
+    pub holders_count: i64,
+    pub first_buy_at: String,
+    pub last_buy_at: String,
+    /// How fast the cohort piled in, first → last buy.
+    pub time_to_consensus_sec: i64,
+    #[serde(default)]
+    pub market_cap_usd_at_first_buy: Option<f64>,
+    #[serde(default)]
+    pub current_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    /// Per-KOL breakdown, largest buyer first.
+    #[serde(default)]
+    pub kols: Vec<CoordinationKol>,
+}
+
+/// Response of [`Kol::coordination`](crate::api::kol::Kol::coordination).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationResponse {
+    pub chain: String,
+    pub coordination: Vec<CoordinationToken>,
+    pub count: u32,
+    pub period: String,
+    pub min_kols: i64,
+}
+
+// ─── KOL: first touches ──────────────────────────────────────────────────────
+
+/// Query parameters for
+/// [`Kol::first_touches`](crate::api::kol::Kol::first_touches).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FirstTouchesParams {
+    /// Max events (1..=100, default 50). Clamped to 20 below PRO.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// ISO 8601 — only first-touches strictly newer. The polling idiom: pass back
+    /// the newest timestamp you saw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// ISO 8601 cursor — only first-touches strictly older. Pass `next_before`
+    /// from the previous response to page back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Minimum first-buy size in ETH (0..=100000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_eth: Option<f64>,
+    /// Only tokens younger than N minutes at first touch (1..=43200).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_age_max_min: Option<u32>,
+    /// Filter by launchpad: pons, flap, clanker, hood.fun, noxa, virtuals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launchpad: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<f64>,
+}
+
+/// The KOL behind a first touch. `evm_address` is ULTRA/BUSINESS only.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchKol {
+    /// ULTRA/BUSINESS only — omitted on lower tiers.
+    #[serde(default)]
+    pub evm_address: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub twitter_url: Option<String>,
+}
+
+/// The first time ANY tracked KOL bought a given token.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchEvent {
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    pub first_buy_at: String,
+    #[serde(default)]
+    pub eth_amount: Option<f64>,
+    #[serde(default)]
+    pub token_amount: Option<f64>,
+    pub tx_hash: String,
+    /// Token age at the first KOL buy, in minutes.
+    #[serde(default)]
+    pub token_age_minutes: Option<i64>,
+    #[serde(default)]
+    pub market_cap_usd_at_first_buy: Option<f64>,
+    #[serde(default)]
+    pub price_usd_at_first_buy: Option<f64>,
+    #[serde(default)]
+    pub current_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    pub first_kol: FirstTouchKol,
+}
+
+/// Response of [`Kol::first_touches`](crate::api::kol::Kol::first_touches).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchesResponse {
+    pub chain: String,
+    pub events: Vec<FirstTouchEvent>,
+    pub count: u32,
+    /// Cursor for the next page — pass as `before` to fetch older events.
+    #[serde(default)]
+    pub next_before: Option<String>,
+    #[serde(default)]
+    pub data_age_seconds: Option<i64>,
 }
 
 // ─── Trades: DEX tape ────────────────────────────────────────────────────────
@@ -960,6 +1274,133 @@ pub struct RhcBundleResponse {
     pub wallets: Vec<RhcBundleWallet>,
 }
 
+// ─── Tokens: batch ───────────────────────────────────────────────────────────
+
+/// JSON body for the two batch POST endpoints: `{"addresses": [...]}`.
+///
+/// Built for you by [`Tokens::batch`](crate::api::tokens::Tokens::batch) and
+/// [`Tokens::batch_buyer_quality`](crate::api::tokens::Tokens::batch_buyer_quality) —
+/// exposed so callers can log or reuse the exact wire body.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BatchAddressesRequest {
+    pub addresses: Vec<String>,
+}
+
+/// Deployer reputation block on a batch token entry.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenBatchDeployer {
+    /// Deployer wallet (lowercase 0x).
+    pub address: String,
+    /// How the deployer was attributed (e.g. the launchpad event).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Present only when the deployer has a reputation row.
+    #[serde(default)]
+    pub tier: Option<String>,
+    #[serde(default)]
+    pub tokens_deployed: Option<i64>,
+    /// Tokens that reached a $40K+ peak MC.
+    #[serde(default)]
+    pub graduated: Option<i64>,
+    /// The $40K bar. Still returned, but it NO LONGER sets the tier.
+    #[serde(default)]
+    pub graduation_rate: Option<f64>,
+    /// Tokens that peaked ≥ $100K MC.
+    #[serde(default)]
+    pub runners: Option<i64>,
+    /// The $100K bar — this is what `tier` now rides on.
+    #[serde(default)]
+    pub runner_rate: Option<f64>,
+}
+
+/// One token in a batch response. Every REQUESTED address is echoed back, so
+/// unknown tokens appear as `found: false` with the rest of the fields absent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenBatchEntry {
+    pub address: String,
+    pub found: bool,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<i64>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub graduated_at: Option<String>,
+    #[serde(default)]
+    pub first_seen_at: Option<String>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub fdv_usd: Option<f64>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_at: Option<String>,
+    #[serde(default)]
+    pub primary_dex: Option<String>,
+    #[serde(default)]
+    pub last_trade_time: Option<String>,
+    #[serde(default)]
+    pub deployer: Option<TokenBatchDeployer>,
+}
+
+/// Response of [`Tokens::batch`](crate::api::tokens::Tokens::batch).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenBatchResponse {
+    pub chain: String,
+    /// One entry per requested address, in the order sent (de-duplicated).
+    pub tokens: Vec<TokenBatchEntry>,
+    pub requested: i64,
+    /// How many of the requested addresses resolved to a known token.
+    pub found: i64,
+}
+
+/// One token in a batch buyer-quality response.
+///
+/// Per-token failures degrade to an entry carrying `error` rather than failing
+/// the whole batch — one unpriced token never costs you the other 19 results.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchBuyerQualityEntry {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub current_mc_usd: Option<f64>,
+    /// `None` when this token failed to score — see `error`.
+    #[serde(default)]
+    pub quality: Option<BuyerQuality>,
+    /// Present only when buyer data is insufficient.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Present only when this one token failed to score.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Response of
+/// [`Tokens::batch_buyer_quality`](crate::api::tokens::Tokens::batch_buyer_quality).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchBuyerQualityResponse {
+    pub chain: String,
+    pub tokens: Vec<BatchBuyerQualityEntry>,
+    pub requested: i64,
+    /// Entries that scored (the rest carry `error`).
+    pub scored: i64,
+    /// The server-side cap — **20**, deliberately lower than the Solana batch
+    /// cap of 50 (per-token cohort computation, not one set-based query).
+    pub max_addresses: i64,
+    #[serde(default)]
+    pub coverage: Option<BuyerQualityCoverage>,
+}
+
 // ─── Deployer-hunter: leaderboard ────────────────────────────────────────────
 
 /// Query parameters for
@@ -971,7 +1412,8 @@ pub struct DeployerLeaderboardParams {
     /// Filter to one reputation tier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier: Option<DeployerTier>,
-    /// Minimum tokens deployed. Default 3 — the minimum sample for a graded tier.
+    /// Minimum tokens deployed (1..=100000, default 3). Note that `elite`/`good`
+    /// themselves require ≥5 launches **and** 24h of deployer history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -988,11 +1430,13 @@ pub struct RhcDeployerRow {
     pub tokens_deployed: i64,
     /// Tokens that reached a $40K+ peak MC (the graduation milestone).
     pub graduated: i64,
-    /// `graduated ÷ tokens_deployed`.
+    /// `graduated ÷ tokens_deployed` — the $40K bar. Still returned, but it no
+    /// longer sets `tier` (only `spammer` still keys off it).
     pub graduation_rate: f64,
     /// Tokens that peaked ≥ $100K MC.
     pub runners: i64,
-    /// `runners ÷ tokens_deployed`.
+    /// `runners ÷ tokens_deployed` — the $100K bar. This is what `tier` rides
+    /// on (migrations 267 + 269).
     pub runner_rate: f64,
     #[serde(default)]
     pub best_peak_mc_usd: Option<f64>,
@@ -1030,6 +1474,7 @@ pub struct RhcDeployer {
     #[serde(default)]
     pub bonding_rate: Option<f64>,
     pub runners: i64,
+    /// `runners ÷ tokens_deployed` — the $100K bar that `tier` rides on.
     pub runner_rate: f64,
     #[serde(default)]
     pub best_peak_mc_usd: Option<f64>,
@@ -1088,6 +1533,495 @@ pub struct DeployerProfileResponse {
     /// Rows returned (capped at 50) — the true total is `deployer.tokens_deployed`.
     #[serde(default)]
     pub recent_tokens_count: i64,
+}
+
+// ─── Deployer-hunter: trajectory ─────────────────────────────────────────────
+
+/// The trailing run at the end of a deployer's (chronological) launch history.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrajectoryStreak {
+    /// `bond` (a graduation) | `fail` | `none`. Field names keep the Solana
+    /// `bond` wording so the two chains stay drop-in compatible.
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub count: i64,
+}
+
+/// One rolling 10-launch window.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrajectoryWindow {
+    /// 1-based index of the launch that closes this window.
+    pub window_end: i64,
+    /// Share of the window's launches that graduated (0–1).
+    pub bond_rate: f64,
+}
+
+/// The best or worst rolling 10-launch stretch.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrajectoryStretch {
+    pub start_index: i64,
+    pub end_index: i64,
+    pub bond_rate: f64,
+}
+
+/// A deployer's launch quality over time.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTrajectory {
+    pub current_streak: TrajectoryStreak,
+    pub longest_bond_streak: i64,
+    pub longest_fail_streak: i64,
+    /// Rolling 10-launch success rates, oldest window first.
+    #[serde(default)]
+    pub rolling_bond_rates: Vec<TrajectoryWindow>,
+    /// Latest rolling rate vs the lifetime rate, ±0.05.
+    pub trend: TrajectoryTrend,
+    #[serde(default)]
+    pub avg_days_between_deploys: Option<f64>,
+    /// Average launches burned between a miss and the next hit.
+    #[serde(default)]
+    pub avg_recovery_tokens: Option<f64>,
+    #[serde(default)]
+    pub best_stretch: Option<TrajectoryStretch>,
+    #[serde(default)]
+    pub worst_stretch: Option<TrajectoryStretch>,
+    pub total_tokens_analyzed: i64,
+}
+
+/// Response of
+/// [`DeployerHunter::trajectory`](crate::api::deployer_hunter::DeployerHunter::trajectory).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTrajectoryResponse {
+    pub chain: String,
+    /// False if this wallet has never deployed a tracked token.
+    pub is_deployer: bool,
+    pub address: String,
+    #[serde(default)]
+    pub deployer: Option<RhcDeployerRow>,
+    /// What was actually counted per token: the $40K peak-MC graduation
+    /// milestone — NOT the $100K runner bar that TIERS ride on.
+    #[serde(default)]
+    pub success_metric: Option<String>,
+    /// `None` for an unknown wallet.
+    #[serde(default)]
+    pub trajectory: Option<DeployerTrajectory>,
+    /// True when the analysis hit the 500-launch cap, so the curve is not the
+    /// whole history.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+// ─── Deployer-hunter: launch history (paginated) ─────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::tokens`](crate::api::deployer_hunter::DeployerHunter::tokens).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeployerTokensParams {
+    /// Page size (1..=100, default 50).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Page offset (0..=10000, default 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<DeployerTokensSort>,
+}
+
+/// One token in a deployer's paginated launch history.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTokenRow {
+    pub address: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    /// How the deployer was attributed for this token.
+    #[serde(default)]
+    pub deployer_source: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub graduated_at: Option<String>,
+    #[serde(default)]
+    pub first_seen_at: Option<String>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_at: Option<String>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+}
+
+/// Response of
+/// [`DeployerHunter::tokens`](crate::api::deployer_hunter::DeployerHunter::tokens).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTokensResponse {
+    pub chain: String,
+    pub is_deployer: bool,
+    pub address: String,
+    #[serde(default)]
+    pub deployer: Option<RhcDeployerRow>,
+    #[serde(default)]
+    pub tokens: Vec<DeployerTokenRow>,
+    /// The deployer's lifetime launch count — page until `has_more` is false.
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub has_more: bool,
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// `"page"` when `sort = peak_mc_usd` — the ordering was applied to this page
+    /// only, not the whole history.
+    #[serde(default)]
+    pub sort_scope: Option<String>,
+}
+
+// ─── Deployer-hunter: best tokens ────────────────────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::best_tokens`](crate::api::deployer_hunter::DeployerHunter::best_tokens).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BestTokensParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<BestTokensPeriod>,
+    /// Max tokens (1..=50, default 10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Reputation block on a best-tokens row.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BestTokenDeployer {
+    pub address: String,
+    /// `elite` or `good` — earned on the $100K `runner_rate`.
+    pub tier: String,
+    /// The $40K bar. Returned, but it no longer sets the tier.
+    #[serde(default)]
+    pub graduation_rate: Option<f64>,
+    #[serde(default)]
+    pub runner_rate: Option<f64>,
+    pub tokens_deployed: i64,
+}
+
+/// A token launched in the window by a currently-reputable deployer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BestToken {
+    pub address: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub first_seen_at: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_at: Option<String>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    #[serde(default)]
+    pub deployer: Option<BestTokenDeployer>,
+}
+
+/// Response of
+/// [`DeployerHunter::best_tokens`](crate::api::deployer_hunter::DeployerHunter::best_tokens).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BestTokensResponse {
+    pub chain: String,
+    /// Ranked by peak MC, descending.
+    pub tokens: Vec<BestToken>,
+    pub period: String,
+    pub limit: i64,
+    /// Size of the elite/good deployer population the window was drawn from.
+    pub reputable_deployers: i64,
+    /// Launches considered before ranking. Absent when the population was empty.
+    #[serde(default)]
+    pub candidates_scanned: Option<i64>,
+    /// True when the top-N was drawn from the 1000 most RECENT launches in the
+    /// period rather than the whole period.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+// ─── Deployer-hunter: chain-wide stats ───────────────────────────────────────
+
+/// Population of one reputation tier.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTierCount {
+    pub deployers: i64,
+    pub tokens: i64,
+}
+
+/// The ACTIVE tier thresholds, so you can see what `elite` currently means
+/// instead of guessing from the label.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerTierRules {
+    /// Earned on the $100K `runner_rate` (migrations 267 + 269).
+    #[serde(default)]
+    pub elite: Option<String>,
+    #[serde(default)]
+    pub good: Option<String>,
+    /// The one tier still keyed off `graduation_rate` — detecting trash is a
+    /// different question from detecting quality.
+    #[serde(default)]
+    pub spammer: Option<String>,
+    #[serde(default)]
+    pub neutral: Option<String>,
+}
+
+/// Response of
+/// [`DeployerHunter::stats`](crate::api::deployer_hunter::DeployerHunter::stats).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerStatsResponse {
+    pub chain: String,
+    pub total_deployers: i64,
+    pub total_tokens: i64,
+    /// `elite` + `good` deployers.
+    pub reputable_deployers: i64,
+    /// Tier name → population.
+    #[serde(default)]
+    pub by_tier: HashMap<String, DeployerTierCount>,
+    /// Share of all indexed tokens deployed by `spammer`-tier wallets.
+    #[serde(default)]
+    pub spam_token_share: Option<f64>,
+    pub alerts_24h: i64,
+    pub alerts_7d: i64,
+    pub tier_rules: DeployerTierRules,
+    /// `"peak market cap >= $40,000"`.
+    pub graduation_definition: String,
+    /// `"peak market cap >= $100,000"`.
+    pub runner_definition: String,
+}
+
+// ─── Deployer-hunter: alerts ─────────────────────────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::alerts`](crate::api::deployer_hunter::DeployerHunter::alerts).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeployerAlertsParams {
+    /// Matched against the READ-TIME `tier`, not the snapshot, so the filter and
+    /// the payload always agree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployer_tier: Option<DeployerTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<DeployerAlertPriority>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_type: Option<DeployerAlertType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launchpad: Option<String>,
+    /// Minimum market cap at alert time (USD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc: Option<f64>,
+    /// `true` disables the default $100 liquidity floor and returns the raw tape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_untradeable: Option<bool>,
+    /// ISO 8601 — only alerts with `event_at` strictly newer. The
+    /// incremental-polling idiom: pass back `next_event_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// ISO 8601 cursor — only alerts strictly older. Takes precedence over
+    /// `offset`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Max alerts (1..=500, default 50). BASIC/PRO are capped at 50; only ULTRA
+    /// gets the full requested limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Page offset (0..=10000, default 0). Ignored when `before` is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+/// A single deployer alert.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcDeployerAlert {
+    pub id: String,
+    pub deployer_address: String,
+    #[serde(default)]
+    pub token_address: Option<String>,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_name: Option<String>,
+    pub alert_type: DeployerAlertType,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Restated at read time in terms of the $100K runner rate for elite/good
+    /// deployers, replacing snapshot copy that quoted the $40K graduation rate.
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    /// The deployer's CURRENT tier, resolved at read time — not the snapshot.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// The snapshot written when the alert fired.
+    #[serde(default)]
+    pub tier_at_alert: Option<String>,
+    /// True when `tier` and `tier_at_alert` disagree.
+    #[serde(default)]
+    pub tier_is_stale: bool,
+    #[serde(default)]
+    pub mc_at_alert: Option<f64>,
+    #[serde(default)]
+    pub current_mc_usd: Option<f64>,
+    /// Live liquidity — what the tradability filter gates on.
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    pub priority: DeployerAlertPriority,
+    pub is_active: bool,
+    pub created_at: String,
+    /// When the on-chain event actually happened. This is the ordering key.
+    #[serde(default)]
+    pub event_at: Option<String>,
+}
+
+/// Response of
+/// [`DeployerHunter::alerts`](crate::api::deployer_hunter::DeployerHunter::alerts).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerAlertsResponse {
+    pub chain: String,
+    pub alerts: Vec<RhcDeployerAlert>,
+    pub limit: i64,
+    pub offset: i64,
+    /// The active setting, echoed back — `"liquidity_usd >= $100"` or
+    /// `"off (include_untradeable=true)"`.
+    pub tradability_filter: String,
+    /// Newest `event_at` on this page — pass as `since` to poll forward.
+    #[serde(default)]
+    pub next_event_at: Option<String>,
+    /// Oldest `event_at` on this page — pass as `before` to page backwards.
+    #[serde(default)]
+    pub next_before: Option<String>,
+    #[serde(default)]
+    pub data_age_seconds: Option<i64>,
+}
+
+// ─── Deployer-hunter: deploy history (PRO+) ──────────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::history`](crate::api::deployer_hunter::DeployerHunter::history).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeployerHistoryParams {
+    /// Page size (1..=1000, default 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Page offset (0..=100000, default 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+/// One token in a deployer's deploy history.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerHistoryToken {
+    pub address: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub graduated_at: Option<String>,
+    #[serde(default)]
+    pub graduated_pool: Option<String>,
+    #[serde(default)]
+    pub first_seen_at: Option<String>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_at: Option<String>,
+}
+
+/// Response of
+/// [`DeployerHunter::history`](crate::api::deployer_hunter::DeployerHunter::history).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerHistoryResponse {
+    pub chain: String,
+    pub is_deployer: bool,
+    pub address: String,
+    #[serde(default)]
+    pub deployer: Option<RhcDeployerRow>,
+    /// Newest first, with a stable tiebreaker so pages never overlap or skip.
+    #[serde(default)]
+    pub tokens: Vec<DeployerHistoryToken>,
+    /// Exact count.
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub has_more: bool,
+}
+
+// ─── Deployer-hunter: recent graduations ─────────────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::recent_bonds`](crate::api::deployer_hunter::DeployerHunter::recent_bonds).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RecentBondsParams {
+    /// Filter by the deployer's tier. Tiers ride the $100K runner rate, not the
+    /// $40K graduation bar this feed is keyed on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployer_tier: Option<DeployerTier>,
+    /// Raise the peak-MC floor (USD). Never lowers it below $40K.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_peak: Option<f64>,
+    /// Max tokens (1..=200, default 50).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// A token that crossed the $40K peak-MC graduation milestone.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecentBondToken {
+    pub address: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    #[serde(default)]
+    pub is_graduated: Option<bool>,
+    #[serde(default)]
+    pub deployer_address: Option<String>,
+    #[serde(default)]
+    pub deployer_tier: Option<String>,
+    #[serde(default)]
+    pub first_seen_at: Option<String>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_at: Option<String>,
+}
+
+/// Response of
+/// [`DeployerHunter::recent_bonds`](crate::api::deployer_hunter::DeployerHunter::recent_bonds).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecentBondsResponse {
+    pub chain: String,
+    /// The graduation milestone in USD — 40000.
+    pub graduation_mc: i64,
+    /// Newest peak first.
+    pub tokens: Vec<RecentBondToken>,
+    pub limit: i64,
+    /// Newest peak timestamp on this page (informational).
+    #[serde(default)]
+    pub next_peak_mc_at: Option<String>,
 }
 
 // ─── Alpha wallets ───────────────────────────────────────────────────────────

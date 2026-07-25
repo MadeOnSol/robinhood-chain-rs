@@ -5,11 +5,11 @@ use thiserror::Error;
 pub enum RobinhoodChainError {
     /// API key was missing or malformed at construction time.
     ///
-    /// Get a free key at <https://madeonsol.com/developer> — Robinhood Chain
+    /// Get a free key at <https://madeonsol.com/pricing> — Robinhood Chain
     /// coverage is bundled into every tier at no extra cost.
     #[error(
         "RobinhoodChain: apiKey is required and must start with `msk_`. \
-         Get a free key at https://madeonsol.com/developer"
+         Get a free key at https://madeonsol.com/pricing"
     )]
     MissingApiKey,
 
