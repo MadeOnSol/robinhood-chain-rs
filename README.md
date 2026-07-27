@@ -19,7 +19,7 @@ Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `t
 
 ```toml
 [dependencies]
-robinhood-chain = "0.1"
+robinhood-chain = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -142,7 +142,7 @@ for a in alerts.alerts {
 ## Streaming
 
 Two WebSocket channels carry Robinhood Chain events live (same
-`wss://madeonsol.com/stream` protocol as the Solana stream client):
+`wss://madeonsol.com/ws/v1/stream` protocol as the Solana stream client):
 
 | Channel constant | Value | Payload |
 |---|---|---|
