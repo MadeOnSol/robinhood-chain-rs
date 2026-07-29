@@ -1047,6 +1047,49 @@ pub struct TokenDetailResponse {
     pub pools: Vec<serde_json::Value>,
 }
 
+// ─── Tokens: token intel (top-traders / flow / peak-history / holders) ───────
+
+/// Query parameters for [`Tokens::top_traders`](crate::api::tokens::Tokens::top_traders).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TopTradersParams {
+    /// Rows to return. Capped at 50 on PRO, 200 on ULTRA/BUSINESS. Default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Page offset (0..=10000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+/// Query parameters for [`Tokens::flow`](crate::api::tokens::Tokens::flow).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FlowParams {
+    /// Lookback window: `1h`, `6h`, `24h` or `7d`. Default `24h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+}
+
+/// Query parameters for [`Tokens::peak_history`](crate::api::tokens::Tokens::peak_history).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PeakHistoryParams {
+    /// Curve window: `24h`, `7d`, `30d` or `all`. Default `7d`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    /// `"false"` to skip the series and return only the peak summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<String>,
+}
+
+/// Query parameters for [`Tokens::holders`](crate::api::tokens::Tokens::holders).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HoldersParams {
+    /// Rows to return. Capped at 50 on PRO, 200 on ULTRA/BUSINESS. Default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Page offset (0..=10000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
 // ─── Tokens: candles ─────────────────────────────────────────────────────────
 
 /// Query parameters for [`Tokens::candles`](crate::api::tokens::Tokens::candles).
