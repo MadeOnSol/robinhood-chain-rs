@@ -833,7 +833,10 @@ pub struct RhcTrade {
     /// for wallet analytics.
     #[serde(default)]
     pub trader: Option<String>,
-    /// Authoritative trader wallet (tx.from).
+    /// The effective trading account — `tx.from` on an ordinary transaction, or
+    /// the ERC-4337 userOp sender when the trade was bundled. Never the router
+    /// or the bundler. An EOA either way: userOp senders on this chain carry an
+    /// EIP-7702 delegation rather than being contract accounts.
     #[serde(default)]
     pub trader_eoa: Option<String>,
     /// Router/aggregator contract (tx.to).

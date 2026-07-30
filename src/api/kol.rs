@@ -18,9 +18,10 @@ pub struct Kol {
 impl Kol {
     /// Real-time KOL trade feed on Robinhood Chain (`GET /rhc/kol/feed`, BASIC+).
     ///
-    /// Every buy/sell from tracked KOLs' verified EVM wallets, attributed via
-    /// `tx.from`, enriched with the token's MC/liquidity/peak, the deployer's
-    /// reputation tier, and `mc_multiple_since_trade`.
+    /// Every buy/sell from tracked KOLs' verified EVM wallets, attributed to the
+    /// effective trading account (`tx.from`, or the ERC-4337 userOp sender when
+    /// the trade was bundled), enriched with the token's MC/liquidity/peak, the
+    /// deployer's reputation tier, and `mc_multiple_since_trade`.
     pub async fn feed(&self, params: &KolFeedParams) -> Result<KolFeedResponse> {
         self.core.get("/rhc/kol/feed", params).await
     }
