@@ -43,12 +43,26 @@
 //!
 //! ## Namespaces
 //!
-//! - [`RobinhoodChain::kol`] — KOL feed, leaderboard, consensus hot-tokens, coordination, first-touches, single-KOL profile
+//! - [`RobinhoodChain::kol`] — KOL feed, leaderboard, consensus hot-tokens, coordination, first-touches, single-KOL profile, plus the coordination-alert (PRO+) and first-touch-subscription (ULTRA+) rule engines
 //! - [`RobinhoodChain::trades`] — the DEX trade tape (PRO+)
 //! - [`RobinhoodChain::tokens`] — token discovery, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle, batch reads
 //! - [`RobinhoodChain::deployer_hunter`] — deployer reputation: leaderboard, profile, trajectory, launch history, best-tokens, stats, alerts, recent graduations
 //! - [`RobinhoodChain::alpha_wallets`] — smart-money wallet ranking (PRO+)
+//! - [`RobinhoodChain::copytrade`] — copy-trade rules + fired-signal history (PRO+)
+//! - [`RobinhoodChain::price_alerts`] — price alerts + dip/recovery events (PRO+)
 //! - [`RobinhoodChain::stream`] — WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels
+//!
+//! ## Push rule engines
+//!
+//! Four rule engines turn the read endpoints into push: copy-trade, price
+//! alerts, KOL coordination and KOL first-touches. Each rule delivers by
+//! webhook (HMAC-SHA256 signed), WebSocket, or both, and each keeps a
+//! queryable fire history for catch-up after a missed delivery.
+//!
+//! ⚠️ **Quotas are PER CHAIN** — a full set of Solana rules does not consume any
+//! Robinhood Chain capacity. Two RHC-specific differences worth knowing before
+//! you port Solana code: RHC price alerts are **~15s polled, not sub-second**,
+//! and RHC copy-trade rules have **no market-cap band**.
 //!
 //! Full API reference: <https://madeonsol.com/api-docs> · Robinhood Chain overview:
 //! <https://madeonsol.com/robinhood>
@@ -64,8 +78,8 @@ pub mod types;
 use std::sync::Arc;
 
 use crate::api::{
-    alpha_wallets::AlphaWallets, deployer_hunter::DeployerHunter, kol::Kol, stream::Stream,
-    tokens::Tokens, trades::Trades,
+    alpha_wallets::AlphaWallets, copytrade::CopyTrade, deployer_hunter::DeployerHunter, kol::Kol,
+    price_alerts::PriceAlerts, stream::Stream, tokens::Tokens, trades::Trades,
 };
 use crate::client::HttpCore;
 use crate::error::{Result, RobinhoodChainError};
@@ -106,6 +120,10 @@ pub struct RobinhoodChain {
     pub deployer_hunter: DeployerHunter,
     /// Smart-money wallet ranking (PRO+).
     pub alpha_wallets: AlphaWallets,
+    /// Copy-trade rule engine: rules + fired-signal history (PRO+).
+    pub copytrade: CopyTrade,
+    /// Price-alert rule engine: alerts + dip/recovery events (PRO+).
+    pub price_alerts: PriceAlerts,
     /// WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels.
     pub stream: Stream,
 }
@@ -138,6 +156,8 @@ impl RobinhoodChain {
             tokens: Tokens { core: Arc::clone(&core) },
             deployer_hunter: DeployerHunter { core: Arc::clone(&core) },
             alpha_wallets: AlphaWallets { core: Arc::clone(&core) },
+            copytrade: CopyTrade { core: Arc::clone(&core) },
+            price_alerts: PriceAlerts { core: Arc::clone(&core) },
             stream: Stream { core },
         })
     }
@@ -164,5 +184,87 @@ mod tests {
         let client = RobinhoodChain::new("msk_test_abcdef").unwrap();
         // Smoke test — namespaces exist and the client clones cheaply.
         let _cloned = client.clone();
+    }
+
+    /// An all-default PATCH body must serialize to `{}` — never to a wall of
+    /// nulls that would clear every nullable column.
+    #[test]
+    fn patch_omits_untouched_fields() {
+        let body = serde_json::to_string(&types::CopyTradeUpdateParams::default()).unwrap();
+        assert_eq!(body, "{}");
+    }
+
+    /// `Option<Option<T>>` must distinguish "leave alone" from "set null".
+    #[test]
+    fn patch_distinguishes_omit_from_explicit_null() {
+        let clear = serde_json::to_value(&types::PriceAlertUpdateParams {
+            name: Some(None),
+            is_active: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(clear["name"], serde_json::Value::Null);
+        assert!(clear.get("name").is_some(), "explicit null must be sent");
+        assert!(clear.get("webhook_url").is_none(), "omitted key must not be sent");
+
+        let set = serde_json::to_value(&types::PriceAlertUpdateParams {
+            name: Some(Some("renamed".into())),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(set["name"], "renamed");
+    }
+
+    /// Rule-engine enums must hit the exact wire literals the API validates on.
+    #[test]
+    fn rule_engine_enums_match_wire_literals() {
+        use types::*;
+        assert_eq!(
+            serde_json::to_string(&DeliveryMode::Websocket).unwrap(),
+            "\"websocket\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CopyTradeSizingMode::PercentSource).unwrap(),
+            "\"percent_source\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FirstTouchStrategy::DayTrader).unwrap(),
+            "\"day_trader\""
+        );
+        assert_eq!(DeliveryMode::Both.as_str(), "both");
+        assert_eq!(PriceAlertStatus::Watching.as_str(), "watching");
+        assert_eq!(PriceAlertEventType::Recovery.as_str(), "recovery");
+        assert_eq!(CopyTradeOnlyAction::Sell.as_str(), "sell");
+    }
+
+    /// The two fire-history endpoints omit `count` entirely when the caller owns
+    /// no rules at all — that must not be a parse failure.
+    #[test]
+    fn fire_history_parses_without_count() {
+        let signals: types::CopyTradeSignalsResponse =
+            serde_json::from_str(r#"{"chain":"robinhood","signals":[]}"#).unwrap();
+        assert_eq!(signals.count, 0);
+
+        let events: types::PriceAlertEventsResponse =
+            serde_json::from_str(r#"{"chain":"robinhood","events":[]}"#).unwrap();
+        assert_eq!(events.count, 0);
+    }
+
+    /// A first-touch subscription with no filters comes back as `{}`, and an
+    /// empty filter set must serialize to `{}` rather than a null soup.
+    #[test]
+    fn first_touch_filters_round_trip() {
+        let sub: types::RhcFirstTouchSubscription = serde_json::from_str(
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":null,"filters":{},
+                "delivery_mode":"websocket","webhook_url":null,"is_active":true,
+                "created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(sub.filters.kol.is_none());
+        assert_eq!(sub.delivery_mode, types::DeliveryMode::Websocket);
+        assert_eq!(
+            serde_json::to_string(&types::FirstTouchFilters::default()).unwrap(),
+            "{}"
+        );
     }
 }

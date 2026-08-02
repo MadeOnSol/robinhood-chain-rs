@@ -2206,3 +2206,807 @@ pub struct StreamSessionEvicted {
     #[serde(default, rename = "_rid")]
     pub _rid: Option<String>,
 }
+
+// ─── Rule engines: shared ────────────────────────────────────────────────────
+
+/// Where a fired rule is delivered.
+///
+/// [`Websocket`](Self::Websocket) needs no `webhook_url`; anything else requires
+/// one (HTTPS only, SSRF-checked server-side).
+///
+/// ⚠️ A `webhook_secret` is minted **once**, at creation, and keys off whether a
+/// `webhook_url` was supplied — NOT off `delivery_mode`. Sending
+/// `delivery_mode: Websocket` together with a `webhook_url` still mints one.
+/// Webhook payloads are signed HMAC-SHA256 over `<timestamp>.<body>` in the
+/// `X-MadeOnSol-Signature` header.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryMode {
+    Webhook,
+    Websocket,
+    Both,
+}
+
+impl DeliveryMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::Websocket => "websocket",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// Response of every rule-engine `DELETE`.
+///
+/// `deleted` is always `true` — a delete that matched nothing returns a 404
+/// [`Error::Api`](crate::Error) instead.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcDeletedResponse {
+    /// Always `"robinhood"`.
+    pub chain: String,
+    pub deleted: bool,
+}
+
+// ─── Rule engine: copy-trade subscriptions ───────────────────────────────────
+
+/// Which side of the tape a copy-trade rule reacts to.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyTradeOnlyAction {
+    Buy,
+    Sell,
+    Both,
+}
+
+impl CopyTradeOnlyAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Buy => "buy",
+            Self::Sell => "sell",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// How the suggested size is derived from the source trade.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyTradeSizingMode {
+    /// `sizing_amount` is a flat ETH size.
+    Fixed,
+    /// `sizing_amount` multiplies the source trade's ETH size.
+    Proportional,
+    /// `sizing_amount` is a percentage of the source trade's ETH size.
+    PercentSource,
+}
+
+impl CopyTradeSizingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Proportional => "proportional",
+            Self::PercentSource => "percent_source",
+        }
+    }
+}
+
+/// One Robinhood Chain copy-trade rule.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcCopyTradeSubscription {
+    /// Numeric identity primary key (bigint).
+    pub id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Lowercase `0x` wallets this rule follows — the API lowercases on write.
+    /// Never empty.
+    pub source_wallets: Vec<String>,
+    /// Minimum source-trade size, in ETH, for the rule to fire.
+    pub min_trade_eth: f64,
+    pub only_action: CopyTradeOnlyAction,
+    pub sizing_mode: CopyTradeSizingMode,
+    /// ETH when `sizing_mode` is [`Fixed`](CopyTradeSizingMode::Fixed), else the
+    /// multiplier / percentage applied to the source trade.
+    pub sizing_amount: f64,
+    pub delivery_mode: DeliveryMode,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response of [`CopyTrade::list`](crate::api::copytrade::CopyTrade::list).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopyTradeListResponse {
+    /// Always `"robinhood"`.
+    pub chain: String,
+    pub subscriptions: Vec<RhcCopyTradeSubscription>,
+}
+
+/// Body for [`CopyTrade::create`](crate::api::copytrade::CopyTrade::create).
+///
+/// `source_wallets` and `sizing_amount` are required; every other field takes a
+/// server-side default. Unknown keys are **rejected with a 400**, not ignored.
+///
+/// There is **no market-cap band** here, unlike the Solana copy-trade rule: the
+/// RHC notify payload carries no market cap, so a band could only be a per-event
+/// DB lookup in the hot path of a ~3.3M-trades/day chain.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CopyTradeCreateParams {
+    /// 1..=64 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Required. 1..=250 EVM addresses (`0x`, 40 hex), lowercased on write. The
+    /// per-tier wallet cap is enforced server-side (PRO 5 / ULTRA 50 /
+    /// BUSINESS 250) and a breach is a 400.
+    pub source_wallets: Vec<String>,
+    /// Minimum source-trade size in ETH, `>= 0`. Default 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_trade_eth: Option<f64>,
+    /// Default [`Buy`](CopyTradeOnlyAction::Buy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only_action: Option<CopyTradeOnlyAction>,
+    /// Default [`Fixed`](CopyTradeSizingMode::Fixed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing_mode: Option<CopyTradeSizingMode>,
+    /// Required, strictly `> 0` — ETH size, or the multiplier / percentage, per
+    /// `sizing_mode`.
+    pub sizing_amount: f64,
+    /// Default [`Webhook`](DeliveryMode::Webhook).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// HTTPS only. Required unless `delivery_mode` is
+    /// [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+}
+
+/// Response of [`CopyTrade::create`](crate::api::copytrade::CopyTrade::create).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopyTradeCreateResponse {
+    pub chain: String,
+    pub subscription: RhcCopyTradeSubscription,
+    /// Shown **once** — store it now, it is never returned again. `None` when no
+    /// `webhook_url` was supplied.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    /// Either the "save the secret" note, or the name of the WebSocket channel
+    /// to subscribe to (`rhc:copytrade:signals`).
+    pub note: String,
+}
+
+/// Response of [`CopyTrade::get`](crate::api::copytrade::CopyTrade::get) and
+/// [`CopyTrade::update`](crate::api::copytrade::CopyTrade::update).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopyTradeGetResponse {
+    pub chain: String,
+    pub subscription: RhcCopyTradeSubscription,
+}
+
+/// Body for [`CopyTrade::update`](crate::api::copytrade::CopyTrade::update).
+///
+/// Omitted fields are left untouched; an all-empty body is a 400.
+///
+/// `name` and `webhook_url` are nullable on the wire, so they are
+/// `Option<Option<String>>`: `None` omits the key entirely, `Some(None)` sends
+/// an explicit `null` (clears the value), `Some(Some(v))` sets it. Clearing
+/// `webhook_url` while `delivery_mode` still requires one is rejected by the
+/// database, so clear both together.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CopyTradeUpdateParams {
+    /// `Some(None)` clears the label. 1..=64 characters otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    /// The per-tier wallet cap is re-checked, so a PRO rule cannot be PATCHed
+    /// past its limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_wallets: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_trade_eth: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only_action: Option<CopyTradeOnlyAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing_mode: Option<CopyTradeSizingMode>,
+    /// Strictly `> 0`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing_amount: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// `Some(None)` clears the webhook URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_active: Option<bool>,
+}
+
+// ─── Rule engine: copy-trade signals ─────────────────────────────────────────
+
+/// Query parameters for
+/// [`CopyTrade::signals`](crate::api::copytrade::CopyTrade::signals).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CopyTradeSignalsParams {
+    /// Scope to one of your rules — 404 if you do not own it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<i64>,
+    /// ISO 8601 lower bound on `fired_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// 1..=500, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One fired copy-trade signal.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcCopyTradeSignal {
+    pub id: i64,
+    pub subscription_id: i64,
+    pub fired_at: String,
+    /// The followed wallet whose trade triggered the fire.
+    pub source_wallet: String,
+    pub action: TradeAction,
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_name: Option<String>,
+    /// Size of the source trade, in ETH.
+    #[serde(default)]
+    pub source_eth_amount: Option<f64>,
+    /// Size your rule's `sizing_mode` implies, in ETH.
+    #[serde(default)]
+    pub suggested_eth_amount: Option<f64>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+    #[serde(default)]
+    pub dex: Option<String>,
+    pub tx_hash: String,
+    pub delivered: bool,
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+}
+
+/// Response of [`CopyTrade::signals`](crate::api::copytrade::CopyTrade::signals).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CopyTradeSignalsResponse {
+    pub chain: String,
+    pub signals: Vec<RhcCopyTradeSignal>,
+    /// ⚠️ The API **omits** this key when you own no copy-trade rules at all, so
+    /// it defaults to 0 rather than failing to parse.
+    #[serde(default)]
+    pub count: u32,
+}
+
+// ─── Rule engine: price alerts ───────────────────────────────────────────────
+
+/// Lifecycle of a price alert. `Recovered` and `Expired` are terminal.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PriceAlertStatus {
+    Watching,
+    Dipped,
+    Recovered,
+    Expired,
+}
+
+impl PriceAlertStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Watching => "watching",
+            Self::Dipped => "dipped",
+            Self::Recovered => "recovered",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+/// One Robinhood Chain price alert.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcPriceAlert {
+    pub id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    /// Market cap captured at creation — the alert is a delta from the moment
+    /// you set it, not from the token's all-time anything.
+    pub baseline_mc_usd: f64,
+    pub drop_pct: f64,
+    /// `None` for a dip-only, terminal alert.
+    #[serde(default)]
+    pub recovery_pct: Option<f64>,
+    pub status: PriceAlertStatus,
+    /// Lowest market cap seen since the dip fired.
+    #[serde(default)]
+    pub dip_low_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub dip_fired_at: Option<String>,
+    pub delivery_mode: DeliveryMode,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    pub is_active: bool,
+    /// Alerts self-expire 30 days after creation.
+    pub expires_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response of [`PriceAlerts::list`](crate::api::price_alerts::PriceAlerts::list).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceAlertListResponse {
+    pub chain: String,
+    pub alerts: Vec<RhcPriceAlert>,
+}
+
+/// Body for
+/// [`PriceAlerts::create`](crate::api::price_alerts::PriceAlerts::create).
+///
+/// Unknown keys are **rejected with a 400**, not ignored.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PriceAlertCreateParams {
+    /// 1..=64 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Required, EVM address (`0x`, 40 hex). The token must already be tracked
+    /// on Robinhood Chain **with a market cap** to baseline against, else 400.
+    pub token_address: String,
+    /// Required. 0.01..=99.99.
+    pub drop_pct: f64,
+    /// 0.01..=1000. Omit for a dip-only, terminal alert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_pct: Option<f64>,
+    /// Default [`Webhook`](DeliveryMode::Webhook).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// HTTPS only. Required unless `delivery_mode` is
+    /// [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+}
+
+/// How Robinhood Chain price alerts are evaluated.
+///
+/// ⚠️ **Not parity with Solana.** RHC alerts are POLLED off `rhc_token_prices`
+/// (`interval_seconds` ≈ 15) rather than reacting to a live sub-second price
+/// loop, because the RHC price writer emits no `pg_notify`. Effective latency is
+/// that interval plus the token's own price-update cadence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceAlertEvaluation {
+    /// Always `"polled"`.
+    pub mode: String,
+    /// Poll interval in seconds (~15).
+    pub interval_seconds: i64,
+    pub note: String,
+}
+
+/// Response of
+/// [`PriceAlerts::create`](crate::api::price_alerts::PriceAlerts::create).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceAlertCreateResponse {
+    pub chain: String,
+    pub alert: RhcPriceAlert,
+    /// Shown **once** — `None` when no `webhook_url` was supplied.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    pub evaluation: PriceAlertEvaluation,
+    /// Either the "save the secret" note, or the name of the WebSocket channel
+    /// to subscribe to (`rhc:price_alert:events`).
+    pub note: String,
+}
+
+/// Response of [`PriceAlerts::get`](crate::api::price_alerts::PriceAlerts::get)
+/// and [`PriceAlerts::update`](crate::api::price_alerts::PriceAlerts::update).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceAlertGetResponse {
+    pub chain: String,
+    pub alert: RhcPriceAlert,
+}
+
+/// Body for
+/// [`PriceAlerts::update`](crate::api::price_alerts::PriceAlerts::update).
+///
+/// `token_address`, `drop_pct` and `recovery_pct` are **immutable** — retuning a
+/// threshold mid-flight would make the alert's already-recorded events
+/// uninterpretable. Delete and recreate instead; sending them is a 400.
+///
+/// `name` and `webhook_url` are nullable on the wire: `None` omits the key,
+/// `Some(None)` sends an explicit `null`, `Some(Some(v))` sets it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PriceAlertUpdateParams {
+    /// `Some(None)` clears the label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// `Some(None)` clears the webhook URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_active: Option<bool>,
+}
+
+// ─── Rule engine: price-alert events ─────────────────────────────────────────
+
+/// Which leg of a price alert fired.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PriceAlertEventType {
+    Dip,
+    Recovery,
+}
+
+impl PriceAlertEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dip => "dip",
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+/// Query parameters for
+/// [`PriceAlerts::events`](crate::api::price_alerts::PriceAlerts::events).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PriceAlertEventsParams {
+    /// Scope to one of your alerts — 404 if you do not own it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<PriceAlertEventType>,
+    /// ISO 8601 lower bound on `fired_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// 1..=500, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One fired dip or recovery event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcPriceAlertEvent {
+    pub id: i64,
+    pub alert_id: i64,
+    pub event_type: PriceAlertEventType,
+    pub fired_at: String,
+    pub token_address: String,
+    pub baseline_mc_usd: f64,
+    pub current_mc_usd: f64,
+    /// Measured drop at fire time, in percent.
+    #[serde(default)]
+    pub drop_pct_actual: Option<f64>,
+    #[serde(default)]
+    pub dip_low_mc_usd: Option<f64>,
+    /// Measured bounce off the dip low, in percent — recovery events only.
+    #[serde(default)]
+    pub recovery_pct_actual: Option<f64>,
+    pub delivered: bool,
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+}
+
+/// Response of
+/// [`PriceAlerts::events`](crate::api::price_alerts::PriceAlerts::events).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PriceAlertEventsResponse {
+    pub chain: String,
+    pub events: Vec<RhcPriceAlertEvent>,
+    /// ⚠️ The API **omits** this key when you own no price alerts at all, so it
+    /// defaults to 0 rather than failing to parse.
+    #[serde(default)]
+    pub count: u32,
+}
+
+// ─── Rule engine: KOL coordination alerts ────────────────────────────────────
+
+/// One Robinhood Chain coordination rule.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcCoordinationAlertRule {
+    /// UUID.
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Distinct tracked-KOL buyers needed to fire (2..=50).
+    pub min_kols: i64,
+    /// Rolling window those buys must land inside, in minutes (1..=60).
+    pub window_minutes: i64,
+    /// Minimum coordination score to fire (0..=100).
+    pub min_score: i64,
+    /// Minutes before the same token can fire again (1..=1440).
+    pub cooldown_min: i64,
+    /// Score jump that breaks the cooldown early (0..=100).
+    pub score_jump_break: i64,
+    #[serde(default)]
+    pub min_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub max_mc_usd: Option<f64>,
+    pub delivery_mode: DeliveryMode,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response of
+/// [`Kol::coordination_alerts_list`](crate::api::kol::Kol::coordination_alerts_list).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationAlertListResponse {
+    pub chain: String,
+    pub rules: Vec<RhcCoordinationAlertRule>,
+}
+
+/// Body for
+/// [`Kol::coordination_alerts_create`](crate::api::kol::Kol::coordination_alerts_create).
+///
+/// Every field is optional — the server default is noted per field. The five
+/// counters must be whole numbers, and `min_mc_usd` must be `<= max_mc_usd` when
+/// both are set. Unknown keys are **rejected with a 400**, not ignored.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CoordinationAlertCreateParams {
+    /// 1..=64 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 2..=50, default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_kols: Option<u32>,
+    /// 1..=60, default 15.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
+    /// 0..=100, default 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<u32>,
+    /// 1..=1440, default 30.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooldown_min: Option<u32>,
+    /// 0..=100, default 20.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_jump_break: Option<u32>,
+    /// 0..=1e12. `Some(None)` sends an explicit `null` (no lower band).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<Option<f64>>,
+    /// 0..=1e12. `Some(None)` sends an explicit `null` (no upper band).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<Option<f64>>,
+    /// Default [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// HTTPS only. Required unless `delivery_mode` is
+    /// [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+}
+
+/// Which scorer components are real on Robinhood Chain.
+///
+/// Scores are comparable to the Solana coordination scorer, but `earliness` is
+/// defaulted (RHC has no early-entry equivalent) while `quality` is a real KOL
+/// win-rate. Every fired signal records the same breakdown in its `score_inputs`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationAlertScoring {
+    pub score_version: String,
+    pub quality: String,
+    pub earliness: String,
+    pub note: String,
+}
+
+/// Response of
+/// [`Kol::coordination_alerts_create`](crate::api::kol::Kol::coordination_alerts_create).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationAlertCreateResponse {
+    pub chain: String,
+    pub rule: RhcCoordinationAlertRule,
+    /// Shown **once** — `None` when no `webhook_url` was supplied.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    pub scoring: CoordinationAlertScoring,
+    /// Either the "save the secret" note, or the name of the WebSocket channel
+    /// to subscribe to (`rhc:kol:coordination`).
+    pub note: String,
+}
+
+/// Response of
+/// [`Kol::coordination_alerts_get`](crate::api::kol::Kol::coordination_alerts_get)
+/// and
+/// [`Kol::coordination_alerts_update`](crate::api::kol::Kol::coordination_alerts_update).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinationAlertGetResponse {
+    pub chain: String,
+    pub rule: RhcCoordinationAlertRule,
+}
+
+/// Body for
+/// [`Kol::coordination_alerts_update`](crate::api::kol::Kol::coordination_alerts_update).
+///
+/// Omitted fields are left untouched. `name`, `min_mc_usd`, `max_mc_usd` and
+/// `webhook_url` are nullable on the wire: `None` omits the key, `Some(None)`
+/// sends an explicit `null`, `Some(Some(v))` sets it.
+///
+/// ⚠️ The `min_mc_usd <= max_mc_usd` check only runs when **both** bounds are in
+/// the same PATCH body; a one-sided PATCH that inverts the band is refused by
+/// the database instead. Send both together.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CoordinationAlertUpdateParams {
+    /// `Some(None)` clears the label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    /// 2..=50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_kols: Option<u32>,
+    /// 1..=60.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
+    /// 0..=100.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<u32>,
+    /// 1..=1440.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooldown_min: Option<u32>,
+    /// 0..=100.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_jump_break: Option<u32>,
+    /// `Some(None)` clears the lower market-cap band.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<Option<f64>>,
+    /// `Some(None)` clears the upper market-cap band.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<Option<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// `Some(None)` clears the webhook URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_active: Option<bool>,
+}
+
+// ─── Rule engine: KOL first-touch subscriptions ──────────────────────────────
+
+/// Auto-classified trading style of the first-touching KOL.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FirstTouchStrategy {
+    Scalper,
+    DayTrader,
+    Swing,
+    Inactive,
+    Unscored,
+}
+
+impl FirstTouchStrategy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Scalper => "scalper",
+            Self::DayTrader => "day_trader",
+            Self::Swing => "swing",
+            Self::Inactive => "inactive",
+            Self::Unscored => "unscored",
+        }
+    }
+}
+
+/// Push filters on a first-touch subscription.
+///
+/// ⚠️ Deliberately **not** the Solana filter set: Robinhood Chain has no scout
+/// score, so `min_scout_tier` / `min_n_touches` are absent rather than silently
+/// matching nothing — [`min_kol_winrate`](Self::min_kol_winrate) and
+/// [`strategy`](Self::strategy) are the quality gates. Unknown filter keys are
+/// **rejected with a 400**, not ignored, and `min_mc_usd` must be
+/// `<= max_mc_usd` when both are set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FirstTouchFilters {
+    /// Only this KOL's first touches (`0x`, 40 hex) — lowercased on write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kol: Option<String>,
+    /// Minimum first-buy size in ETH (0..=100000).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_first_buy_eth: Option<f64>,
+    /// 0..=1. Win-rate on CLOSED positions — a KOL who has never sold is
+    /// dropped, not counted as a loser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_kol_winrate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<FirstTouchStrategy>,
+    /// 0..=1e12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_mc_usd: Option<f64>,
+    /// 0..=1e12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mc_usd: Option<f64>,
+}
+
+/// One Robinhood Chain first-touch subscription.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFirstTouchSubscription {
+    /// UUID.
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Never null — an unfiltered subscription carries an empty filter set.
+    #[serde(default)]
+    pub filters: FirstTouchFilters,
+    pub delivery_mode: DeliveryMode,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Response of
+/// [`Kol::first_touch_subscriptions_list`](crate::api::kol::Kol::first_touch_subscriptions_list).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchSubscriptionListResponse {
+    pub chain: String,
+    pub subscriptions: Vec<RhcFirstTouchSubscription>,
+}
+
+/// Body for
+/// [`Kol::first_touch_subscriptions_create`](crate::api::kol::Kol::first_touch_subscriptions_create).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FirstTouchSubscriptionCreateParams {
+    /// 1..=64 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Default `{}` — every first touch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<FirstTouchFilters>,
+    /// Default [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// HTTPS only. Required unless `delivery_mode` is
+    /// [`Websocket`](DeliveryMode::Websocket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+}
+
+/// Response of
+/// [`Kol::first_touch_subscriptions_create`](crate::api::kol::Kol::first_touch_subscriptions_create).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchSubscriptionCreateResponse {
+    pub chain: String,
+    pub subscription: RhcFirstTouchSubscription,
+    /// Shown **once** — `None` when no `webhook_url` was supplied.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    /// Either the "save the secret" note, or the name of the WebSocket channel
+    /// to subscribe to (`rhc:kol:first_touches`).
+    pub note: String,
+}
+
+/// Response of
+/// [`Kol::first_touch_subscriptions_get`](crate::api::kol::Kol::first_touch_subscriptions_get)
+/// and
+/// [`Kol::first_touch_subscriptions_update`](crate::api::kol::Kol::first_touch_subscriptions_update).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FirstTouchSubscriptionGetResponse {
+    pub chain: String,
+    pub subscription: RhcFirstTouchSubscription,
+}
+
+/// Body for
+/// [`Kol::first_touch_subscriptions_update`](crate::api::kol::Kol::first_touch_subscriptions_update).
+///
+/// `filters` is a whole-object **replace**, not a merge — merging would make
+/// "remove this filter" inexpressible. It cannot be set to `null`; send
+/// `Some(FirstTouchFilters::default())` to clear every filter.
+///
+/// `name` and `webhook_url` are nullable on the wire: `None` omits the key,
+/// `Some(None)` sends an explicit `null`, `Some(Some(v))` sets it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FirstTouchSubscriptionUpdateParams {
+    /// `Some(None)` clears the label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
+    /// Whole-object replace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<FirstTouchFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<DeliveryMode>,
+    /// `Some(None)` clears the webhook URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_active: Option<bool>,
+}

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * route-parity-check.mjs — fails CI if this SDK drifts from the 25 documented
- * Robinhood Chain API routes.
+ * route-parity-check.mjs — fails CI if this SDK drifts from the documented
+ * Robinhood Chain API surface.
  *
  * This standalone crate is NOT scanned by the monorepo's sdk-route-parity guard,
- * so it ships its own. The 25 `/rhc/*` routes (23 GET + 2 batch POST) are pinned
- * below (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
+ * so it ships its own. The 40 `/rhc/*` paths — carrying 52 operations, because
+ * the ten rule-engine paths each serve several HTTP methods — are pinned below
+ * (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
  *
- *   1. Every `/rhc/*` path literal in src/ MUST resolve to one of the 25 routes.
- *   2. All 25 routes MUST be referenced by the client (coverage).
+ *   1. Every `/rhc/*` path literal in src/ MUST resolve to one of the paths.
+ *   2. All pinned paths MUST be referenced by the client (coverage).
  *
  * Non-`/rhc/*` infra paths (WebSocket-token issuance under /stream/*) are
  * allow-listed — they are shared endpoints, not RHC-specific.
@@ -22,7 +23,7 @@ import path from "node:path";
 
 const SRC = process.env.SRC_DIR || "src";
 
-// The 25 documented Robinhood Chain routes, normalized ({param} -> :p).
+// The 40 documented Robinhood Chain paths, normalized ({param} -> :p).
 const RHC_ROUTES = [
   "/rhc/kol/feed",
   "/rhc/kol/leaderboard",
@@ -37,6 +38,11 @@ const RHC_ROUTES = [
   "/rhc/tokens/:p/kol-consensus",
   "/rhc/tokens/:p/buyer-quality",
   "/rhc/tokens/:p/bundle",
+  "/rhc/tokens/:p/top-traders",
+  "/rhc/tokens/:p/flow",
+  "/rhc/tokens/:p/peak-history",
+  "/rhc/tokens/:p/risk",
+  "/rhc/tokens/:p/holders",
   "/rhc/token/batch",
   "/rhc/tokens/batch/buyer-quality",
   "/rhc/deployer-hunter/leaderboard",
@@ -49,6 +55,18 @@ const RHC_ROUTES = [
   "/rhc/deployer-hunter/:p/tokens",
   "/rhc/deployer-hunter/:p/history",
   "/rhc/alpha-wallets",
+  // Rule engines (multi-method paths): copy-trade, price alerts, KOL
+  // coordination alerts, KOL first-touch subscriptions.
+  "/rhc/copytrade/subscriptions",
+  "/rhc/copytrade/subscriptions/:p",
+  "/rhc/copytrade/signals",
+  "/rhc/price-alerts",
+  "/rhc/price-alerts/:p",
+  "/rhc/price-alerts/events",
+  "/rhc/kol/coordination/alerts",
+  "/rhc/kol/coordination/alerts/:p",
+  "/rhc/kol/first-touches/subscriptions",
+  "/rhc/kol/first-touches/subscriptions/:p",
 ];
 const ROUTES = new Set(RHC_ROUTES);
 
