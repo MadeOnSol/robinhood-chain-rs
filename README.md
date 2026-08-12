@@ -19,7 +19,7 @@ Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `t
 
 ```toml
 [dependencies]
-robinhood-chain = "0.4"
+robinhood-chain = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -71,7 +71,7 @@ The `RobinhoodChain` client exposes namespaced sub-clients:
 | `client.alpha_wallets` | Smart-money wallet ranking |
 | `client.copytrade` | Copy-trade rule engine: rules + fired-signal history (PRO+) |
 | `client.price_alerts` | Price-alert rule engine: alerts + dip/recovery events (PRO+) |
-| `client.stream` | WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels |
+| `client.stream` | WebSocket streaming token issuance + the six `rhc:*` channels (see [Streaming](#streaming)) |
 
 ## Endpoint → method map (all 52 operations, 40 paths)
 
@@ -261,18 +261,37 @@ merge, so "remove this filter" stays expressible.
 
 ## Streaming
 
-Two WebSocket channels carry Robinhood Chain events live (same
+Six WebSocket channels carry Robinhood Chain events live (same
 `wss://madeonsol.com/ws/v1/stream` protocol as the Solana stream client):
 
-| Channel constant | Value | Payload |
-|---|---|---|
-| `stream::RHC_KOL_TRADES` | `rhc:kol_trades` | Every tracked-KOL buy/sell on chain 4663 |
-| `stream::RHC_TRADES` | `rhc:trades` | The full RHC DEX swap firehose (PRO+) |
+| Channel constant | Value | Tier | Payload |
+|---|---|---|---|
+| `stream::RHC_KOL_TRADES` | `rhc:kol_trades` | PRO+ (connection gate) | Every tracked-KOL buy/sell on chain 4663 (`rhc:kol_trade` events) |
+| `stream::RHC_DEX_TRADES` | `rhc:dex_trades` | **ULTRA+** | The full RHC DEX swap firehose, ~40-55 trades/s at tip (`rhc:dex_trade` events) |
+| `stream::RHC_COPYTRADE_SIGNALS` | `rhc:copytrade:signals` | PRO+ | Your copy-trade rule fires (`rhc:copytrade:signal`, user-scoped) |
+| `stream::RHC_PRICE_ALERT_EVENTS` | `rhc:price_alert:events` | PRO+ | Your price-alert fires (`rhc:price_alert:dip` / `rhc:price_alert:recovery`, user-scoped, ~15s polled) |
+| `stream::RHC_KOL_COORDINATION` | `rhc:kol:coordination` | PRO+ | Your coordination-alert rule fires (`rhc:kol:coordination`, user-scoped) |
+| `stream::RHC_KOL_FIRST_TOUCHES` | `rhc:kol:first_touches` | PRO+ | Every token's FIRST tracked-KOL buy (`rhc:kol:first_touch`, **broadcast** — ULTRA gates only the first-touch subscription CRUD, not this channel) |
+
+> **Fixed in 0.5.0:** 0.4.0's `stream::RHC_TRADES` pointed at `rhc:trades`, a
+> channel that never existed server-side — subscribing drew a
+> `channels_rejected` warning and then silence — and its docs claimed PRO+
+> where the real firehose gate is ULTRA+. The constant now carries the real
+> name `rhc:dex_trades` (and is deprecated in favor of `RHC_DEX_TRADES`); the
+> server additionally accepts `rhc:trades` as a deprecated alias for 0.4.0
+> clients. The four rule-engine channel constants above are new in 0.5.0.
+
+The server never fails a `subscribe` outright: channels your tier cannot
+access are dropped and reported in a warning frame
+(`{"type":"warning","code":"channels_rejected","rejected":[{"channel":"...","reason":"requires ULTRA"}],"valid_channels":[...],"ts":...}`)
+followed by the normal `subscribed` ack. Watch for it — a rejected channel
+otherwise looks like a healthy but silent subscription.
 
 ```rust
 let ws = client.stream.get_token().await?; // POST /stream/token (PRO+)
 // Connect to `ws.ws_url` with `?token=<ws.token>` appended, then subscribe to
-// robinhood_chain::api::stream::RHC_KOL_TRADES / RHC_TRADES.
+// robinhood_chain::api::stream::RHC_KOL_TRADES / RHC_DEX_TRADES / the four
+// rule-engine channel constants.
 ```
 
 ## Error handling

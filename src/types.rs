@@ -2154,8 +2154,9 @@ pub struct AlphaWalletsResponse {
 /// A 24-hour WebSocket streaming token, as returned by
 /// [`Stream::get_token`](crate::api::stream::Stream::get_token).
 ///
-/// Subscribe to the Robinhood Chain channels [`RHC_KOL_TRADES`](crate::api::stream::RHC_KOL_TRADES)
-/// and [`RHC_TRADES`](crate::api::stream::RHC_TRADES) after connecting to `ws_url`.
+/// Subscribe to the Robinhood Chain channels [`RHC_KOL_TRADES`](crate::api::stream::RHC_KOL_TRADES),
+/// [`RHC_DEX_TRADES`](crate::api::stream::RHC_DEX_TRADES) (ULTRA+), or the four
+/// rule-engine channels after connecting to `ws_url`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamToken {
     pub token: String,

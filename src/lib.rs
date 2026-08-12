@@ -50,7 +50,7 @@
 //! - [`RobinhoodChain::alpha_wallets`] — smart-money wallet ranking (PRO+)
 //! - [`RobinhoodChain::copytrade`] — copy-trade rules + fired-signal history (PRO+)
 //! - [`RobinhoodChain::price_alerts`] — price alerts + dip/recovery events (PRO+)
-//! - [`RobinhoodChain::stream`] — WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels
+//! - [`RobinhoodChain::stream`] — WebSocket streaming token issuance + the six `rhc:*` channels (`rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), and the four rule-engine channels)
 //!
 //! ## Push rule engines
 //!
@@ -124,7 +124,9 @@ pub struct RobinhoodChain {
     pub copytrade: CopyTrade,
     /// Price-alert rule engine: alerts + dip/recovery events (PRO+).
     pub price_alerts: PriceAlerts,
-    /// WebSocket streaming token issuance + `rhc:kol_trades` / `rhc:trades` channels.
+    /// WebSocket streaming token issuance + the six `rhc:*` channels
+    /// (`rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), and the four rule-engine
+    /// channels — see [`api::stream`]).
     pub stream: Stream,
 }
 
