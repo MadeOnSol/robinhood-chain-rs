@@ -25,48 +25,58 @@ const SRC = process.env.SRC_DIR || "src";
 
 // The 40 documented Robinhood Chain paths, normalized ({param} -> :p).
 const RHC_ROUTES = [
-  "/rhc/kol/feed",
-  "/rhc/kol/leaderboard",
-  "/rhc/kol/hot-tokens",
-  "/rhc/kol/coordination",
-  "/rhc/kol/first-touches",
-  "/rhc/kol/:p",
-  "/rhc/trades",
-  "/rhc/tokens",
-  "/rhc/tokens/:p",
-  "/rhc/tokens/:p/candles",
-  "/rhc/tokens/:p/kol-consensus",
-  "/rhc/tokens/:p/buyer-quality",
-  "/rhc/tokens/:p/bundle",
-  "/rhc/tokens/:p/top-traders",
-  "/rhc/tokens/:p/flow",
-  "/rhc/tokens/:p/peak-history",
-  "/rhc/tokens/:p/risk",
-  "/rhc/tokens/:p/holders",
-  "/rhc/token/batch",
-  "/rhc/tokens/batch/buyer-quality",
-  "/rhc/deployer-hunter/leaderboard",
-  "/rhc/deployer-hunter/alerts",
-  "/rhc/deployer-hunter/best-tokens",
-  "/rhc/deployer-hunter/recent-bonds",
-  "/rhc/deployer-hunter/stats",
-  "/rhc/deployer-hunter/:p",
-  "/rhc/deployer-hunter/:p/trajectory",
-  "/rhc/deployer-hunter/:p/tokens",
-  "/rhc/deployer-hunter/:p/history",
   "/rhc/alpha-wallets",
-  // Rule engines (multi-method paths): copy-trade, price alerts, KOL
-  // coordination alerts, KOL first-touch subscriptions.
+  "/rhc/alpha/leaderboard",
+  "/rhc/copytrade/signals",
   "/rhc/copytrade/subscriptions",
   "/rhc/copytrade/subscriptions/:p",
-  "/rhc/copytrade/signals",
+  "/rhc/deployer-hunter/:p",
+  "/rhc/deployer-hunter/:p/history",
+  "/rhc/deployer-hunter/:p/tokens",
+  "/rhc/deployer-hunter/:p/trajectory",
+  "/rhc/deployer-hunter/alerts",
+  "/rhc/deployer-hunter/best-tokens",
+  "/rhc/deployer-hunter/leaderboard",
+  "/rhc/deployer-hunter/recent-bonds",
+  "/rhc/deployer-hunter/stats",
+  "/rhc/kol/:p",
+  "/rhc/kol/coordination",
+  "/rhc/kol/coordination/alerts",
+  "/rhc/kol/coordination/alerts/:p",
+  "/rhc/kol/feed",
+  "/rhc/kol/first-touches",
+  "/rhc/kol/first-touches/subscriptions",
+  "/rhc/kol/first-touches/subscriptions/:p",
+  "/rhc/kol/hot-tokens",
+  "/rhc/kol/leaderboard",
+  "/rhc/kol/tokens/hot",
   "/rhc/price-alerts",
   "/rhc/price-alerts/:p",
   "/rhc/price-alerts/events",
-  "/rhc/kol/coordination/alerts",
-  "/rhc/kol/coordination/alerts/:p",
-  "/rhc/kol/first-touches/subscriptions",
-  "/rhc/kol/first-touches/subscriptions/:p",
+  "/rhc/token/:p",
+  "/rhc/token/batch",
+  "/rhc/tokens",
+  "/rhc/tokens/:p",
+  "/rhc/tokens/:p/bundle",
+  "/rhc/tokens/:p/buyer-quality",
+  "/rhc/tokens/:p/candles",
+  "/rhc/tokens/:p/flow",
+  "/rhc/tokens/:p/holders",
+  "/rhc/tokens/:p/kol-consensus",
+  "/rhc/tokens/:p/peak-history",
+  "/rhc/tokens/:p/risk",
+  "/rhc/tokens/:p/top-traders",
+  "/rhc/tokens/:p/trades",
+  "/rhc/tokens/batch/buyer-quality",
+  "/rhc/trades",
+  "/rhc/wallet-tracker/summary",
+  "/rhc/wallet-tracker/trades",
+  "/rhc/wallet-tracker/watchlist",
+  "/rhc/wallet-tracker/watchlist/:p",
+  "/rhc/wallet/:p",
+  "/rhc/wallet/:p/pnl",
+  "/rhc/wallet/:p/positions",
+  "/rhc/wallet/:p/trades",
 ];
 const ROUTES = new Set(RHC_ROUTES);
 
@@ -125,7 +135,19 @@ if (count < 5) {
   process.exit(2);
 }
 
-const missing = RHC_ROUTES.filter((r) => !seen.has(r));
+// Documented paths that are pure ALIASES of a route the client already calls.
+// The server re-exports the canonical handler for each of these (see the header
+// comment in the corresponding route.ts), so binding both spellings would give
+// the SDK two names for one call. Verified 2026-08-15 — if one of these ever
+// stops being an alias, drop it from this list and bind it properly.
+const ALIAS_ROUTES = new Set([
+  "/rhc/token/:p", // → /rhc/tokens/:p
+  "/rhc/alpha/leaderboard", // → /rhc/alpha-wallets
+  "/rhc/kol/tokens/hot", // → /rhc/kol/hot-tokens
+  "/rhc/tokens/:p/trades", // → /rhc/trades?token=
+]);
+
+const missing = RHC_ROUTES.filter((r) => !seen.has(r) && !ALIAS_ROUTES.has(r));
 const uniqProblems = [...new Set(problems)];
 
 let failed = false;

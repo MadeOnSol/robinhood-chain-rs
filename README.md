@@ -15,11 +15,13 @@ Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `t
 
 > Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** — same `msk_` API key, same base URL (`https://madeonsol.com/api/v1`). Get a free key at **<https://madeonsol.com/pricing>**.
 
+> **New in 0.6.0 — wallet intelligence.** Ten new operations covering the Robinhood Chain wallet surface, which had no SDK binding at all until now: a new `client.wallet` namespace — `profile()`, `pnl()`, `positions()`, `trades()`, `watchlist()`, `track()`, `untrack()`, `relabel()`, `tracked_trades()` and `tracked_summary()`. Everything is **ETH**-denominated, and cost basis is FIFO over a rolling 90-day window — `cost_basis_observable_from` names the date the window opens, so a position opened before it reads as a sell with no matching buy. The profile / PnL / positions trio shares ONE snapshot cache server-side, so calling all three on an address costs roughly one computation rather than three; `cache_hit` says which call paid for it. Watchlist quotas are **per chain** (PRO 50 / ULTRA 100 / BUSINESS 500 RHC wallets), independent of your Solana list.
+
 ## Install
 
 ```toml
 [dependencies]
-robinhood-chain = "0.5"
+robinhood-chain = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

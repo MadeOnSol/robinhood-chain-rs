@@ -48,6 +48,7 @@
 //! - [`RobinhoodChain::tokens`] — token discovery, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle, batch reads
 //! - [`RobinhoodChain::deployer_hunter`] — deployer reputation: leaderboard, profile, trajectory, launch history, best-tokens, stats, alerts, recent graduations
 //! - [`RobinhoodChain::alpha_wallets`] — smart-money wallet ranking (PRO+)
+//! - [`RobinhoodChain::wallet`] — wallet profile, FIFO PnL, positions, tape, watchlist (PRO+)
 //! - [`RobinhoodChain::copytrade`] — copy-trade rules + fired-signal history (PRO+)
 //! - [`RobinhoodChain::price_alerts`] — price alerts + dip/recovery events (PRO+)
 //! - [`RobinhoodChain::stream`] — WebSocket streaming token issuance + the six `rhc:*` channels (`rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), and the four rule-engine channels)
@@ -80,6 +81,7 @@ use std::sync::Arc;
 use crate::api::{
     alpha_wallets::AlphaWallets, copytrade::CopyTrade, deployer_hunter::DeployerHunter, kol::Kol,
     price_alerts::PriceAlerts, stream::Stream, tokens::Tokens, trades::Trades,
+    wallet::Wallet,
 };
 use crate::client::HttpCore;
 use crate::error::{Result, RobinhoodChainError};
@@ -120,6 +122,9 @@ pub struct RobinhoodChain {
     pub deployer_hunter: DeployerHunter,
     /// Smart-money wallet ranking (PRO+).
     pub alpha_wallets: AlphaWallets,
+    /// Wallet intelligence: 90-day ETH profile, FIFO PnL, open positions,
+    /// per-wallet tape, and the per-chain wallet watchlist (PRO+).
+    pub wallet: Wallet,
     /// Copy-trade rule engine: rules + fired-signal history (PRO+).
     pub copytrade: CopyTrade,
     /// Price-alert rule engine: alerts + dip/recovery events (PRO+).
@@ -158,6 +163,7 @@ impl RobinhoodChain {
             tokens: Tokens { core: Arc::clone(&core) },
             deployer_hunter: DeployerHunter { core: Arc::clone(&core) },
             alpha_wallets: AlphaWallets { core: Arc::clone(&core) },
+            wallet: Wallet { core: Arc::clone(&core) },
             copytrade: CopyTrade { core: Arc::clone(&core) },
             price_alerts: PriceAlerts { core: Arc::clone(&core) },
             stream: Stream { core },

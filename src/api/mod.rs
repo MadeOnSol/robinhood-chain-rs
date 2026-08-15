@@ -6,3 +6,4 @@ pub mod price_alerts;
 pub mod stream;
 pub mod tokens;
 pub mod trades;
+pub mod wallet;

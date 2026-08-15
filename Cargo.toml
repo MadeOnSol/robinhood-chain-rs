@@ -1,6 +1,6 @@
 [package]
 name = "robinhood-chain"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Robinhood Chain API SDK (EVM, chain id 4663) — KOL trade intelligence, token discovery & launch-bundle detection, deployer reputation, the DEX trade tape, and the four push rule engines (copy-trade, price alerts, KOL coordination, first touches). Same msk_ key, bundled into every MadeOnSol tier at https://madeonsol.com/pricing"

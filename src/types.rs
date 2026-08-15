@@ -3011,3 +3011,410 @@ pub struct FirstTouchSubscriptionUpdateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_active: Option<bool>,
 }
+
+// ── Wallet intelligence ──────────────────────────────────────────────────────
+//
+// Every figure here is denominated in **ETH**. Cost basis is FIFO over a rolling
+// 90-day window, so "open" means FIFO-unmatched buys INSIDE that window — a
+// position opened before it reads as a sell with no matching buy. That is what
+// `cost_basis_observable_from` and `partial` disclose.
+
+/// 90-day trade statistics for one wallet.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletStats {
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
+    pub total_trades: u64,
+    /// Denominator for every PnL figure below.
+    pub analyzed_trades: u64,
+    /// Pre-2026-07-18 rows with a NULL `trader_eoa` — unattributable by design.
+    pub unattributed_trades: u64,
+    pub unsized_trades: u64,
+    pub buys: u64,
+    pub sells: u64,
+    pub bought_eth: f64,
+    pub sold_eth: f64,
+    pub realized_pnl_eth: f64,
+    pub unrealized_pnl_eth: f64,
+    pub total_pnl_eth: f64,
+    pub held_value_eth: f64,
+    pub unique_tokens: u64,
+    pub open_positions: u64,
+    pub window_days: u32,
+    /// Hit the per-wallet trade cap — figures cover part of the window only.
+    pub partial: bool,
+}
+
+/// Reputation flags, resolved independently of the PnL snapshot.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletFlags {
+    pub is_kol: bool,
+    pub kol_name: Option<String>,
+    pub is_deployer: bool,
+    pub deployer_tier: Option<String>,
+    pub deployer_tokens: Option<u64>,
+    pub deployer_runner_rate: Option<f64>,
+    pub is_alpha_tracked: bool,
+    pub alpha_win_rate: Option<f64>,
+    pub alpha_net_eth: Option<f64>,
+    pub alpha_tokens_traded: Option<u64>,
+    pub likely_bot: Option<bool>,
+    pub is_dumper: bool,
+    #[serde(default)]
+    pub dump_cluster: serde_json::Value,
+    pub early_buyer_tokens: u64,
+}
+
+/// Convenience aggregates computed from [`WalletStats`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletDerived {
+    pub win_rate: Option<f64>,
+    pub wins: u64,
+    pub losses: u64,
+    pub avg_trade_size_eth: Option<f64>,
+    pub is_active: bool,
+}
+
+/// Response for [`Wallet::profile`](crate::api::wallet::Wallet::profile).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletProfileResponse {
+    pub chain: String,
+    pub address: String,
+    pub stats: WalletStats,
+    pub flags: WalletFlags,
+    #[serde(default)]
+    pub top_tokens: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub recent_trades: Vec<serde_json::Value>,
+    pub derived: WalletDerived,
+    /// Snapshot timed out — `flags` still resolve.
+    #[serde(default)]
+    pub stats_unavailable: bool,
+    /// The profile/pnl/positions trio shares one snapshot cache.
+    #[serde(default)]
+    pub cache_hit: bool,
+}
+
+/// One FIFO-unmatched buy position, marked to the current price.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenPosition {
+    pub token_address: String,
+    pub token_symbol: Option<String>,
+    pub token_name: Option<String>,
+    pub launchpad: Option<String>,
+    pub is_graduated: Option<bool>,
+    pub token_amount: f64,
+    pub cost_basis_eth: f64,
+    pub avg_entry_price_eth: f64,
+    pub current_price_eth: Option<f64>,
+    pub current_value_eth: Option<f64>,
+    pub unrealized_eth: Option<f64>,
+    pub unrealized_pct: Option<f64>,
+    pub current_mc_usd: Option<f64>,
+    pub liquidity_usd: Option<f64>,
+    /// `v4_virtual_ceiling` = bonding-curve ceiling, NOT withdrawable TVL —
+    /// never size an exit against it. `measured` = real pool reserves.
+    pub liquidity_basis: String,
+    pub buys_in_position: u64,
+    pub realized_so_far_eth: f64,
+    pub first_buy_at: Option<String>,
+    pub last_buy_at: Option<String>,
+}
+
+/// One fully-closed FIFO position.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClosedPosition {
+    pub token_address: String,
+    pub token_symbol: Option<String>,
+    pub buy_count: u64,
+    pub sell_count: u64,
+    pub bought_eth: f64,
+    pub sold_eth: f64,
+    pub pnl_eth: f64,
+    pub roi_pct: Option<f64>,
+    pub hold_minutes: Option<i64>,
+    /// `win` | `loss` | `breakeven`.
+    pub result: String,
+    pub first_trade: Option<String>,
+    pub last_trade: Option<String>,
+}
+
+/// One day on the realized-PnL curve.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PnlCurvePoint {
+    pub date: String,
+    pub day_pnl: f64,
+    pub cumulative_pnl: f64,
+    pub trades: u64,
+}
+
+/// Headline PnL aggregates.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletPnlSummary {
+    pub realized_eth: f64,
+    pub unrealized_eth: f64,
+    pub total_pnl_eth: f64,
+    pub total_bought_eth: f64,
+    pub total_sold_eth: f64,
+    pub wins: u64,
+    pub losses: u64,
+    pub win_rate: Option<f64>,
+    pub profit_factor: Option<f64>,
+    pub avg_hold_minutes: Option<i64>,
+    pub median_hold_minutes: Option<i64>,
+    pub max_drawdown_eth: f64,
+    pub open_positions_count: u64,
+    pub closed_positions_count: u64,
+    pub total_tokens_traded: u64,
+    #[serde(default)]
+    pub best_realized: serde_json::Value,
+    #[serde(default)]
+    pub worst_realized: serde_json::Value,
+}
+
+/// Disclosure block — read this before quoting any PnL total.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletPnlNotes {
+    /// Always `ETH`.
+    pub denomination: String,
+    /// Buys before this date are invisible to cost basis.
+    pub cost_basis_observable_from: String,
+    pub data_through: Option<String>,
+    pub trades_seen: u64,
+    pub trades_analyzed: u64,
+    pub trades_unattributed: u64,
+    pub trades_unsized: u64,
+    pub partial: bool,
+    #[serde(default)]
+    pub partial_reason: String,
+}
+
+/// Response for [`Wallet::pnl`](crate::api::wallet::Wallet::pnl).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletPnlResponse {
+    pub chain: String,
+    pub address: String,
+    pub window_days: u32,
+    pub summary: WalletPnlSummary,
+    #[serde(default)]
+    pub pnl_curve: Vec<PnlCurvePoint>,
+    #[serde(default)]
+    pub closed_positions: Vec<ClosedPosition>,
+    #[serde(default)]
+    pub open_positions: Vec<OpenPosition>,
+    pub notes: WalletPnlNotes,
+    #[serde(default)]
+    pub cache_hit: bool,
+}
+
+/// Totals across the open book.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletPositionsSummary {
+    pub open_positions: u64,
+    pub total_cost_basis_eth: f64,
+    pub total_current_value_eth: f64,
+    pub total_unrealized_eth: f64,
+    /// Excluded from the value and unrealized totals.
+    pub unpriced_positions: u64,
+}
+
+/// Response for [`Wallet::positions`](crate::api::wallet::Wallet::positions).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletPositionsResponse {
+    pub chain: String,
+    pub address: String,
+    pub window_days: u32,
+    pub summary: WalletPositionsSummary,
+    #[serde(default)]
+    pub positions: Vec<OpenPosition>,
+    #[serde(default)]
+    pub notes: serde_json::Value,
+}
+
+/// Query parameters for [`Wallet::trades`](crate::api::wallet::Wallet::trades).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WalletTradesParams {
+    /// 1..=200, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Opaque keyset cursor — the previous response's `next_before`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// ISO-8601 with offset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<TradeAction>,
+    /// Restrict to one token address (0x, 40 hex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// One swap on a wallet's tape.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrade {
+    pub token_address: Option<String>,
+    pub token_symbol: Option<String>,
+    pub token_name: Option<String>,
+    pub launchpad: Option<String>,
+    pub action: Option<TradeAction>,
+    pub eth_amount: Option<f64>,
+    pub token_amount: Option<f64>,
+    pub price_native: Option<f64>,
+    pub price_usd: Option<f64>,
+    pub mc_usd_at_trade: Option<f64>,
+    pub dex: Option<String>,
+    pub pool: Option<String>,
+    pub router: Option<String>,
+    pub method_selector: Option<String>,
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub block_number: u64,
+    pub block_time: String,
+}
+
+/// Response for [`Wallet::trades`](crate::api::wallet::Wallet::trades).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTradesResponse {
+    pub chain: String,
+    pub address: String,
+    #[serde(default)]
+    pub trades: Vec<WalletTrade>,
+    pub count: u64,
+    pub has_more: bool,
+    /// Opaque cursor for the next page — `None` when the tape is exhausted.
+    pub next_before: Option<String>,
+}
+
+// ── Wallet tracker (watchlist) ───────────────────────────────────────────────
+//
+// Quotas are PER CHAIN: PRO 50 / ULTRA 100 / BUSINESS 500 RHC wallets,
+// independent of the Solana watchlist. Addresses are lowercased on write so they
+// match `rhc_trades.trader_eoa`.
+
+/// One wallet on your watchlist.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackedWallet {
+    pub wallet_address: String,
+    pub label: Option<String>,
+    pub added_at: String,
+}
+
+/// Response for [`Wallet::watchlist`](crate::api::wallet::Wallet::watchlist).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrackerListResponse {
+    pub chain: String,
+    #[serde(default)]
+    pub wallets: Vec<TrackedWallet>,
+    pub count: u64,
+    /// Per-tier cap for this chain.
+    pub limit: u64,
+    pub remaining: u64,
+}
+
+/// Body for [`Wallet::track`](crate::api::wallet::Wallet::track).
+#[derive(Debug, Clone, Serialize)]
+pub struct WalletTrackerAddParams {
+    pub wallet_address: String,
+    /// 1–64 chars. Omit to leave unlabelled — `null` is rejected on add.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Response carrying a single tracked wallet.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrackerWalletResponse {
+    pub chain: String,
+    pub wallet: TrackedWallet,
+}
+
+/// Response for [`Wallet::untrack`](crate::api::wallet::Wallet::untrack).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrackerRemovedResponse {
+    pub chain: String,
+    /// The lowercased address that was removed.
+    pub removed: String,
+}
+
+/// Query parameters for the merged tracked-wallet tape.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WalletTrackerTradesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Must already be on the watchlist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<TradeAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// One swap on the merged tracked-wallet tape, tagged with its watchlist label.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackedWalletTrade {
+    #[serde(flatten)]
+    pub trade: WalletTrade,
+    /// Which tracked wallet made the trade.
+    pub trader_eoa: Option<String>,
+    /// Your watchlist label for that wallet.
+    pub label: Option<String>,
+}
+
+/// Response for [`Wallet::tracked_trades`](crate::api::wallet::Wallet::tracked_trades).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrackerTradesResponse {
+    pub chain: String,
+    #[serde(default)]
+    pub trades: Vec<TrackedWalletTrade>,
+    pub count: u64,
+    pub has_more: bool,
+    pub next_before: Option<String>,
+}
+
+/// Query parameters for the tracked-wallet rollup.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WalletTrackerSummaryParams {
+    /// Lookback window, default `7d`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<String>,
+}
+
+/// Per-wallet activity over the chosen period.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackedWalletStats {
+    pub trades: u64,
+    pub buys: u64,
+    pub sells: u64,
+    pub buy_eth: f64,
+    pub sell_eth: f64,
+    pub net_eth: f64,
+    pub tokens_traded: u64,
+    pub last_trade_at: Option<String>,
+}
+
+/// One row of the tracked-wallet rollup.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackedWalletSummary {
+    pub wallet_address: String,
+    pub label: Option<String>,
+    pub added_at: String,
+    pub stats: TrackedWalletStats,
+}
+
+/// Response for [`Wallet::tracked_summary`](crate::api::wallet::Wallet::tracked_summary).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletTrackerSummaryResponse {
+    pub chain: String,
+    pub period: String,
+    pub interval: String,
+    /// Rollup timed out — per-wallet stats are zeroed, not absent.
+    #[serde(default)]
+    pub stats_unavailable: bool,
+    #[serde(default)]
+    pub wallets: Vec<TrackedWalletSummary>,
+}
