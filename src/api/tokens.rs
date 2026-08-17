@@ -178,6 +178,14 @@ impl Tokens {
     /// `pool_held_pct` / `burned_pct`. `balance` is a raw uint256 returned as a
     /// decimal **string**. Holder addresses may be ERC-4337 smart accounts, so
     /// `holder_count` is not a headcount of people.
+    ///
+    /// `holder_growth.{1h,24h,7d}` reports `entered` (first `Transfer` at-or-after
+    /// the window's `cutoff_block`), `entered_still_holding`, `exited` (pre-existing
+    /// holders whose last `Transfer` in the window left them at zero) and `net` ≈
+    /// Δ `holder_count` — typed as [`crate::types::HolderGrowth`]:
+    /// `serde_json::from_value::<Option<HolderGrowth>>(resp["holder_growth"].clone())`.
+    /// A window is `null` only when the chain had no ingested trades in it; the
+    /// object is `null` only if the growth read failed.
     pub async fn holders(
         &self,
         address: &str,

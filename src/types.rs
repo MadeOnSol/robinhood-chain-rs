@@ -1093,6 +1093,52 @@ pub struct HoldersParams {
     pub offset: Option<u32>,
 }
 
+/// One holder-growth window (`1h` / `24h` / `7d`) inside
+/// [`HolderGrowth`] on `GET /rhc/tokens/{address}/holders`.
+///
+/// Every count is `None` when the window could not be resolved (the chain had
+/// no ingested trades in it). Pools and burn addresses are excluded from all
+/// counts.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HolderGrowthWindow {
+    /// Lowest block observed at-or-after now()−window (from our trade ingest, ~10 blocks/s).
+    #[serde(default)]
+    pub cutoff_block: Option<i64>,
+    /// Addresses whose FIRST `Transfer` of this token landed at-or-after `cutoff_block` (any current balance).
+    #[serde(default)]
+    pub entered: Option<i64>,
+    /// `entered` ∩ balance > 0.
+    #[serde(default)]
+    pub entered_still_holding: Option<i64>,
+    /// Pre-existing holders whose last `Transfer` in the window left them at zero.
+    #[serde(default)]
+    pub exited: Option<i64>,
+    /// `entered_still_holding − exited` ≈ change in `holder_count` over the window.
+    #[serde(default)]
+    pub net: Option<i64>,
+}
+
+/// The `holder_growth` object on `GET /rhc/tokens/{address}/holders`
+/// ([`Tokens::holders`](crate::api::tokens::Tokens::holders)).
+///
+/// Entered / exited holders per window, read from the `Transfer`-log fold
+/// (`first_seen_block` + `last_block`, zero-balance rows retained). The whole
+/// object is `null` on the wire only if the growth read failed; a single window
+/// is `None` when the chain had no ingested trades in it. Deserialize it from
+/// the response with `serde_json::from_value(resp["holder_growth"].clone())`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HolderGrowth {
+    #[serde(rename = "1h", default)]
+    pub h1: Option<HolderGrowthWindow>,
+    #[serde(rename = "24h", default)]
+    pub h24: Option<HolderGrowthWindow>,
+    #[serde(rename = "7d", default)]
+    pub d7: Option<HolderGrowthWindow>,
+    /// Server-side explanation of the semantics.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 // ─── Tokens: candles ─────────────────────────────────────────────────────────
 
 /// Query parameters for [`Tokens::candles`](crate::api::tokens::Tokens::candles).

@@ -15,13 +15,15 @@ Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `t
 
 > Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** — same `msk_` API key, same base URL (`https://madeonsol.com/api/v1`). Get a free key at **<https://madeonsol.com/pricing>**.
 
+> **New in 0.7.0 — `holder_growth`: who arrived and who left.** `client.tokens().holders(address, &params)` now returns `holder_growth` on `GET /rhc/tokens/{address}/holders`: `{ "1h", "24h", "7d" }` × `{ cutoff_block, entered, entered_still_holding, exited, net }`. *entered* = addresses whose first `Transfer` of the token landed at-or-after the window's cutoff block (any current balance); *entered_still_holding* = those still non-zero; *exited* = pre-existing holders whose last movement in the window left them at zero; *net* ≈ the change in `holder_count`. Pools and burn addresses are excluded from every count. This exists because RHC balances are folded from ERC-20 Transfer logs on our own node — the fold keeps first-seen and last-moved blocks per address and retains zero-balance rows — so it is a direct read, not an estimate; the Solana census is a point-in-time ledger scan with no history and cannot answer this. A window is `null` (never 0) only when the chain had no ingested trades in it; the whole block is `null` only if the growth read failed. Sanity check from ship day: a token launched that morning showed 593 entered / 560 still holding over 24h, and `holder_count` was exactly 560. Deserialize it with `serde_json::from_value::<Option<types::HolderGrowth>>(resp["holder_growth"].clone())`.
+
 > **New in 0.6.0 — wallet intelligence.** Ten new operations covering the Robinhood Chain wallet surface, which had no SDK binding at all until now: a new `client.wallet` namespace — `profile()`, `pnl()`, `positions()`, `trades()`, `watchlist()`, `track()`, `untrack()`, `relabel()`, `tracked_trades()` and `tracked_summary()`. Everything is **ETH**-denominated, and cost basis is FIFO over a rolling 90-day window — `cost_basis_observable_from` names the date the window opens, so a position opened before it reads as a sell with no matching buy. The profile / PnL / positions trio shares ONE snapshot cache server-side, so calling all three on an address costs roughly one computation rather than three; `cache_hit` says which call paid for it. Watchlist quotas are **per chain** (PRO 50 / ULTRA 100 / BUSINESS 500 RHC wallets), independent of your Solana list.
 
 ## Install
 
 ```toml
 [dependencies]
-robinhood-chain = "0.6"
+robinhood-chain = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -101,7 +103,7 @@ The `RobinhoodChain` client exposes namespaced sub-clients:
 | 15 | `GET /rhc/tokens/{address}/flow` | `client.tokens.flow(addr, &params)` | PRO+ |
 | 16 | `GET /rhc/tokens/{address}/peak-history` | `client.tokens.peak_history(addr, &params)` | PRO+ |
 | 17 | `GET /rhc/tokens/{address}/risk` | `client.tokens.risk(addr)` | PRO+ |
-| 18 | `GET /rhc/tokens/{address}/holders` | `client.tokens.holders(addr, &params)` | PRO+ |
+| 18 | `GET /rhc/tokens/{address}/holders` | `client.tokens.holders(addr, &params)` — includes `holder_growth` (1h/24h/7d entered / exited / net; `types::HolderGrowth`) | PRO+ |
 | 19 | `POST /rhc/token/batch` | `client.tokens.batch(&addresses)` | BASIC+ |
 | 20 | `POST /rhc/tokens/batch/buyer-quality` | `client.tokens.batch_buyer_quality(&addresses)` | BASIC+ |
 | 21 | `GET /rhc/deployer-hunter/leaderboard` | `client.deployer_hunter.leaderboard(&params)` | BASIC+ |
@@ -157,7 +159,7 @@ subscription ids are UUID `&str`.
 - **Deployer reputation** — 40k+ deployers with tier, trajectory (streaks, rolling 10-launch success rate, `improving`/`declining`/`stable`), full paginated launch history, and chain-wide stats. Most RHC launchpads are direct-to-DEX (no bonding curve), so "graduation" is a $40K+ peak-MC milestone and a "runner" reached $100K+.
 - **Deployer alerts** — live signals when a tracked deployer ships a new token or one of their tokens graduates.
 - **Alpha wallets** — the reverse of KOL discovery: RHC trader wallets ranked by realized on-chain performance (`net_eth`, `win_rate`, `memecoin_share`, `likely_bot`).
-- **Token intel** — per-token `top_traders` (realized flow, not PnL — a holder ranks last), `flow` by trader cohort (`net_eth = sell − buy`, so positive means distribution), `peak_history` (two peaks, because recorded and observed disagree), EVM-native `risk` (sellability simulated at the chain head, never cached), and exact `holders` folded from `Transfer` logs.
+- **Token intel** — per-token `top_traders` (realized flow, not PnL — a holder ranks last), `flow` by trader cohort (`net_eth = sell − buy`, so positive means distribution), `peak_history` (two peaks, because recorded and observed disagree), EVM-native `risk` (sellability simulated at the chain head, never cached), and exact `holders` folded from `Transfer` logs — including `holder_growth` (`1h` / `24h` / `7d`: `entered`, `entered_still_holding`, `exited`, `net` ≈ Δ `holder_count`; pools and burns excluded, a window is `null` only when the chain had no ingested trades in it). Deserialize it with `serde_json::from_value::<Option<types::HolderGrowth>>(h["holder_growth"].clone())`.
 - **Rule engines** — copy-trade, price alerts, KOL coordination and KOL first-touches, each pushing to a webhook or WebSocket with a queryable fire history. See [Rule engines](#rule-engines-push).
 
 ### Two things to know about deployer tiers
