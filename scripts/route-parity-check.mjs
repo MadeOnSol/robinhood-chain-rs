@@ -4,7 +4,7 @@
  * Robinhood Chain API surface.
  *
  * This standalone crate is NOT scanned by the monorepo's sdk-route-parity guard,
- * so it ships its own. The 40 `/rhc/*` paths — carrying 52 operations, because
+ * so it ships its own. The 55 `/rhc/*` paths (5 of them aliases) — carrying 64 operations, because
  * the ten rule-engine paths each serve several HTTP methods — are pinned below
  * (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
  *
@@ -23,7 +23,7 @@ import path from "node:path";
 
 const SRC = process.env.SRC_DIR || "src";
 
-// The 40 documented Robinhood Chain paths, normalized ({param} -> :p).
+// The 55 documented Robinhood Chain paths, normalized ({param} -> :p).
 const RHC_ROUTES = [
   "/rhc/alpha-wallets",
   "/rhc/alpha/leaderboard",
@@ -39,6 +39,7 @@ const RHC_ROUTES = [
   "/rhc/deployer-hunter/leaderboard",
   "/rhc/deployer-hunter/recent-bonds",
   "/rhc/deployer-hunter/stats",
+  "/rhc/equities",
   "/rhc/kol/:p",
   "/rhc/kol/coordination",
   "/rhc/kol/coordination/alerts",
@@ -50,6 +51,7 @@ const RHC_ROUTES = [
   "/rhc/kol/hot-tokens",
   "/rhc/kol/leaderboard",
   "/rhc/kol/tokens/hot",
+  "/rhc/lp-events",
   "/rhc/price-alerts",
   "/rhc/price-alerts/:p",
   "/rhc/price-alerts/events",
@@ -63,6 +65,7 @@ const RHC_ROUTES = [
   "/rhc/tokens/:p/flow",
   "/rhc/tokens/:p/holders",
   "/rhc/tokens/:p/kol-consensus",
+  "/rhc/tokens/:p/lp-events",
   "/rhc/tokens/:p/peak-history",
   "/rhc/tokens/:p/risk",
   "/rhc/tokens/:p/top-traders",
@@ -145,6 +148,7 @@ const ALIAS_ROUTES = new Set([
   "/rhc/alpha/leaderboard", // → /rhc/alpha-wallets
   "/rhc/kol/tokens/hot", // → /rhc/kol/hot-tokens
   "/rhc/tokens/:p/trades", // → /rhc/trades?token=
+  "/rhc/tokens/:p/lp-events", // → /rhc/lp-events?token=
 ]);
 
 const missing = RHC_ROUTES.filter((r) => !seen.has(r) && !ALIAS_ROUTES.has(r));

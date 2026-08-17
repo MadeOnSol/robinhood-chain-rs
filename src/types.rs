@@ -889,6 +889,124 @@ pub struct TradesResponse {
     pub next_before: Option<String>,
 }
 
+// ─── Trades: liquidity removals (lp-events) ──────────────────────────────────
+
+/// Query parameters for [`Trades::lp_events`](crate::api::trades::Trades::lp_events).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LpEventsParams {
+    /// Page size (1..=200).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Filter to one token address (0x, 40 hex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Pool address (v2/v3) or bytes32 poolId (v4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Filter to one liquidity provider — the wallet that pulled (0x, 40 hex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dex: Option<TradeDex>,
+    /// Opaque cursor from a previous response's `next_before`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+}
+
+/// One liquidity REMOVAL on Robinhood Chain (`GET /rhc/lp-events`).
+///
+/// Every row is `event: "remove"` — adds are not persisted. Raw amounts are
+/// on-chain uint256 integers returned as decimal **strings**; never parse them
+/// into an `f64`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcLpEvent {
+    /// Always `"remove"`.
+    pub event: String,
+    pub pool: String,
+    /// `uniswap-v2` / `uniswap-v3` / `uniswap-v4`.
+    pub dex: String,
+    #[serde(default)]
+    pub fee_tier: Option<i64>,
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_name: Option<String>,
+    #[serde(default)]
+    pub token_decimals: Option<i64>,
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    /// Wallet that removed liquidity.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// True when the provider is the token's own deployer — the classic rug shape.
+    #[serde(default)]
+    pub provider_is_token_deployer: bool,
+    #[serde(default)]
+    pub provider_deployer_tier: Option<String>,
+    #[serde(default)]
+    pub provider_kol_name: Option<String>,
+    /// Raw liquidity units removed (v3/v4). uint256 as a decimal string.
+    #[serde(default)]
+    pub liquidity: Option<String>,
+    /// Raw token0 amount (v2/v3 only — v4 emits none). uint256 as a decimal string.
+    #[serde(default)]
+    pub amount0: Option<String>,
+    /// Raw token1 amount (v2/v3 only — v4 emits none). uint256 as a decimal string.
+    #[serde(default)]
+    pub amount1: Option<String>,
+    #[serde(default)]
+    pub token0: Option<String>,
+    #[serde(default)]
+    pub token1: Option<String>,
+    /// `amount0` or `amount1`, whichever is the token side.
+    #[serde(default)]
+    pub token_amount_raw: Option<String>,
+    #[serde(default)]
+    pub quote_token: Option<String>,
+    #[serde(default)]
+    pub quote_amount_raw: Option<String>,
+    pub block_number: i64,
+    /// Exact block header timestamp (ISO 8601).
+    pub block_time: String,
+    pub tx_hash: String,
+    pub log_index: i64,
+}
+
+/// The `coverage` honesty block on [`LpEventsResponse`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct LpEventsCoverage {
+    /// Event kinds persisted — currently only `["remove"]`.
+    #[serde(default)]
+    pub events: Vec<String>,
+    /// Always `false`: liquidity ADDS are not persisted (v4 adds share the topic
+    /// and are dropped at decode time; v2/v3 `Mint` is not subscribed).
+    #[serde(default)]
+    pub adds_persisted: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// First date with data (2026-08-05).
+    #[serde(default)]
+    pub since: Option<String>,
+}
+
+/// Response of [`Trades::lp_events`](crate::api::trades::Trades::lp_events).
+#[derive(Debug, Clone, Deserialize)]
+pub struct LpEventsResponse {
+    pub chain: String,
+    pub events: Vec<RhcLpEvent>,
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub has_more: bool,
+    /// Opaque `(block_time, id)` keyset cursor — pass back as `before`.
+    #[serde(default)]
+    pub next_before: Option<String>,
+    /// Removals-only honesty block (`adds_persisted: false`).
+    #[serde(default)]
+    pub coverage: Option<LpEventsCoverage>,
+}
+
 // ─── Tokens: discovery ───────────────────────────────────────────────────────
 
 /// Query parameters for [`Tokens::list`](crate::api::tokens::Tokens::list).
@@ -955,6 +1073,147 @@ pub struct TokensListResponse {
     pub tokens: Vec<RhcTokenSummary>,
     pub count: u32,
     pub sort: String,
+}
+
+// ─── Tokens: tokenized equities ──────────────────────────────────────────────
+
+/// Ordering for [`Tokens::equities`](crate::api::tokens::Tokens::equities).
+/// `Volume` (default) / `Trades` / `MarketCap` / `LastTrade` are descending;
+/// `Symbol` is ascending.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EquitiesSort {
+    Volume,
+    Trades,
+    MarketCap,
+    LastTrade,
+    Symbol,
+}
+
+impl EquitiesSort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Volume => "volume",
+            Self::Trades => "trades",
+            Self::MarketCap => "market_cap",
+            Self::LastTrade => "last_trade",
+            Self::Symbol => "symbol",
+        }
+    }
+}
+
+/// Query parameters for [`Tokens::equities`](crate::api::tokens::Tokens::equities).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EquitiesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<EquitiesSort>,
+    /// Rows (1..=300, default 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Exact ticker, case-insensitive (e.g. `NVDA`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Substring of symbol or name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+}
+
+/// One beacon-verified Robinhood tokenized equity (`GET /rhc/equities`).
+///
+/// Listed only when the contract is an EIP-1967 beacon proxy on Robinhood's
+/// issuer beacon `0xe10b6f6b…151b00` — identity is the beacon, never the name.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcEquity {
+    pub token_address: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Underlying name with the "• Robinhood Token" suffix stripped (display only).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Raw ERC-20 name.
+    #[serde(default)]
+    pub onchain_name: Option<String>,
+    /// Always `"equity"`.
+    #[serde(default)]
+    pub asset_class: Option<String>,
+    /// Always true here — beacon-verified by construction.
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub issuer_beacon: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<i64>,
+    #[serde(default)]
+    pub listed_at: Option<String>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+    #[serde(default)]
+    pub price_native: Option<f64>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub fdv_usd: Option<f64>,
+    #[serde(default)]
+    pub peak_mc_usd: Option<f64>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    #[serde(default)]
+    pub liquidity_basis: Option<String>,
+    #[serde(default)]
+    pub primary_dex: Option<String>,
+    #[serde(default)]
+    pub primary_pool: Option<String>,
+    #[serde(default)]
+    pub last_trade_time: Option<String>,
+    #[serde(default)]
+    pub trades_24h: i64,
+    #[serde(default)]
+    pub volume_eth_24h: f64,
+    #[serde(default)]
+    pub buys_24h: i64,
+    #[serde(default)]
+    pub sells_24h: i64,
+    /// Distinct buyer wallets in the window.
+    #[serde(default)]
+    pub buyers_24h: i64,
+    /// Distinct seller wallets in the window.
+    #[serde(default)]
+    pub sellers_24h: i64,
+}
+
+/// The `identity` block on [`EquitiesResponse`] — how equities are recognised.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EquitiesIdentity {
+    /// Always `"beacon"`.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Robinhood's issuer beacon (`0xe10b6f6b275de231345c20d14ab812db62151b00`).
+    #[serde(default)]
+    pub issuer_beacon: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Response of [`Tokens::equities`](crate::api::tokens::Tokens::equities).
+#[derive(Debug, Clone, Deserialize)]
+pub struct EquitiesResponse {
+    pub chain: String,
+    pub equities: Vec<RhcEquity>,
+    #[serde(default)]
+    pub count: u32,
+    /// Total beacon-verified equities known, before `limit` / filters.
+    #[serde(default)]
+    pub total_equities: u32,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub identity: Option<EquitiesIdentity>,
+    /// Always `"24h"`.
+    #[serde(default)]
+    pub stats_window: Option<String>,
+    /// When the (60 s cached) 24h stats were computed.
+    #[serde(default)]
+    pub stats_as_of: Option<String>,
 }
 
 // ─── Tokens: single-token bundle snapshot ────────────────────────────────────

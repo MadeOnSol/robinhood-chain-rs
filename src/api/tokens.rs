@@ -20,6 +20,22 @@ impl Tokens {
         self.core.get("/rhc/tokens", params).await
     }
 
+    /// Tokenized stocks & ETFs (`GET /rhc/equities`, BASIC+).
+    ///
+    /// Every official Robinhood tokenized equity (NVDA, SPY, AAPL, …) with live
+    /// price / MC / liquidity and 24h trades, ETH volume, buys/sells and distinct
+    /// buyers/sellers. **Identity is the issuer beacon, never the name**: a token
+    /// is listed only if its contract is an EIP-1967 beacon proxy on Robinhood's
+    /// issuer beacon `0xe10b6f6b275de231345c20d14ab812db62151b00`, read from our
+    /// own node (re-classified every 10 min) — look-alike "GameStop • Robinhood
+    /// Token" contracts are excluded by construction and `issuer_beacon` is
+    /// echoed per row. Sort with [`EquitiesSort`] (default `volume`); `symbol`
+    /// is an exact case-insensitive ticker, `q` a substring of symbol/name.
+    /// 24h stats are cached 60 s (`stats_as_of`).
+    pub async fn equities(&self, params: &EquitiesParams) -> Result<EquitiesResponse> {
+        self.core.get("/rhc/equities", params).await
+    }
+
     /// Single-token bundle snapshot (`GET /rhc/tokens/{address}`, BASIC+).
     ///
     /// Full snapshot for one token: metadata, live price/MC/FDV, peak MC +

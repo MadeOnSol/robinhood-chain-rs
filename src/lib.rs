@@ -44,8 +44,8 @@
 //! ## Namespaces
 //!
 //! - [`RobinhoodChain::kol`] — KOL feed, leaderboard, consensus hot-tokens, coordination, first-touches, single-KOL profile, plus the coordination-alert (PRO+) and first-touch-subscription (ULTRA+) rule engines
-//! - [`RobinhoodChain::trades`] — the DEX trade tape (PRO+)
-//! - [`RobinhoodChain::tokens`] — token discovery, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle, batch reads
+//! - [`RobinhoodChain::trades`] — the DEX trade tape (PRO+) + the liquidity-removals feed `lp_events` (PRO+, removals only)
+//! - [`RobinhoodChain::tokens`] — token discovery, beacon-verified tokenized equities, per-token snapshot, candles, KOL-consensus, buyer-quality, bundle, batch reads
 //! - [`RobinhoodChain::deployer_hunter`] — deployer reputation: leaderboard, profile, trajectory, launch history, best-tokens, stats, alerts, recent graduations
 //! - [`RobinhoodChain::alpha_wallets`] — smart-money wallet ranking (PRO+)
 //! - [`RobinhoodChain::wallet`] — wallet profile, FIFO PnL, positions, tape, watchlist (PRO+)
@@ -112,10 +112,11 @@ pub struct RobinhoodChain {
     /// KOL trade intelligence: feed, leaderboard, consensus hot-tokens,
     /// coordination, first-touches, profile.
     pub kol: Kol,
-    /// The Robinhood Chain DEX trade tape (PRO+).
+    /// The Robinhood Chain DEX trade tape + liquidity-removals feed (PRO+).
     pub trades: Trades,
-    /// Token intelligence: discovery, snapshot, candles, KOL-consensus,
-    /// buyer-quality, bundle, and the two batch reads.
+    /// Token intelligence: discovery, beacon-verified tokenized equities,
+    /// snapshot, candles, KOL-consensus, buyer-quality, bundle, and the two
+    /// batch reads.
     pub tokens: Tokens,
     /// Deployer reputation: leaderboard, profile, trajectory, launch history,
     /// best-tokens, chain-wide stats, alerts, recent graduations.
@@ -256,6 +257,62 @@ mod tests {
         let events: types::PriceAlertEventsResponse =
             serde_json::from_str(r#"{"chain":"robinhood","events":[]}"#).unwrap();
         assert_eq!(events.count, 0);
+    }
+
+    /// A v4 liquidity removal carries `liquidity` only — the amount fields are
+    /// null on the wire and must land as `None`, never as a parse failure. Raw
+    /// amounts stay decimal strings (uint256 does not fit an f64).
+    #[test]
+    fn lp_event_v4_row_parses_with_null_amounts() {
+        let resp: types::LpEventsResponse = serde_json::from_str(
+            r#"{"chain":"robinhood","events":[{"event":"remove","pool":"0xabc","dex":"uniswap-v4",
+                "fee_tier":null,"token_address":"0x1111111111111111111111111111111111111111",
+                "token_symbol":null,"token_name":null,"token_decimals":18,"launchpad":null,
+                "provider":"0x2222222222222222222222222222222222222222","provider_is_token_deployer":true,
+                "provider_deployer_tier":null,"provider_kol_name":null,
+                "liquidity":"340282366920938463463374607431768211455","amount0":null,"amount1":null,
+                "token0":null,"token1":null,"token_amount_raw":null,"quote_token":null,"quote_amount_raw":null,
+                "block_number":123,"block_time":"2026-08-16T00:00:00Z","tx_hash":"0xdead","log_index":4}],
+                "count":1,"has_more":false,"next_before":null,
+                "coverage":{"events":["remove"],"adds_persisted":false,"note":"x","since":"2026-08-05"}}"#,
+        )
+        .unwrap();
+        let ev = &resp.events[0];
+        assert_eq!(ev.event, "remove");
+        assert!(ev.provider_is_token_deployer);
+        assert_eq!(ev.liquidity.as_deref(), Some("340282366920938463463374607431768211455"));
+        assert!(ev.amount0.is_none() && ev.token_amount_raw.is_none());
+        assert!(!resp.coverage.as_ref().unwrap().adds_persisted);
+        assert_eq!(
+            serde_json::to_string(&types::LpEventsParams { dex: Some(types::TradeDex::UniswapV4), ..Default::default() }).unwrap(),
+            r#"{"dex":"uniswap-v4"}"#
+        );
+    }
+
+    /// Equities sort keys hit the exact wire literals; an unpriced equity parses
+    /// with `None` numerics and zeroed 24h counters.
+    #[test]
+    fn equities_sort_and_unpriced_row() {
+        assert_eq!(serde_json::to_string(&types::EquitiesSort::MarketCap).unwrap(), "\"market_cap\"");
+        assert_eq!(types::EquitiesSort::LastTrade.as_str(), "last_trade");
+        let resp: types::EquitiesResponse = serde_json::from_str(
+            r#"{"chain":"robinhood","equities":[{"token_address":"0x3333333333333333333333333333333333333333",
+                "symbol":"NVDA","name":"NVIDIA","onchain_name":"NVIDIA • Robinhood Token","asset_class":"equity",
+                "verified":true,"issuer_beacon":"0xe10b6f6b275de231345c20d14ab812db62151b00","decimals":18,
+                "listed_at":null,"price_usd":null,"price_native":null,"market_cap_usd":null,"fdv_usd":null,
+                "peak_mc_usd":null,"liquidity_usd":null,"liquidity_basis":null,"primary_dex":null,
+                "primary_pool":null,"last_trade_time":null,"trades_24h":0,"volume_eth_24h":0,"buys_24h":0,
+                "sells_24h":0,"buyers_24h":0,"sellers_24h":0}],
+                "count":1,"total_equities":157,"sort":"volume",
+                "identity":{"method":"beacon","issuer_beacon":"0xe10b6f6b275de231345c20d14ab812db62151b00","note":"n"},
+                "stats_window":"24h","stats_as_of":"2026-08-16T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let e = &resp.equities[0];
+        assert_eq!(e.symbol.as_deref(), Some("NVDA"));
+        assert!(e.verified && e.price_usd.is_none());
+        assert_eq!(resp.total_equities, 157);
+        assert_eq!(resp.identity.as_ref().unwrap().method.as_deref(), Some("beacon"));
     }
 
     /// A first-touch subscription with no filters comes back as `{}`, and an
