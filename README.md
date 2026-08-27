@@ -15,6 +15,8 @@ Robinhood Chain is an **Arbitrum Orbit L2**, so every field is EVM-native — `t
 
 > Robinhood Chain coverage is **bundled into every MadeOnSol tier at no extra cost** — same `msk_` API key, same base URL (`https://madeonsol.com/api/v1`). Get a free key at **<https://madeonsol.com/pricing>**.
 
+> **New in 0.8.1 — fix: stream tokens never expire, and `StreamToken` deserializes again.** Since 2026-08-27 `POST /stream/token` returns the SAME token on every call and it never expires — it stops working only if your subscription lapses or you replace it with `{"rotate": true}` (the old value keeps working for 60 s). The API now sends `expires_at: null` and `next_refresh_at: null`, which 0.8.0's `StreamToken { expires_at: String }` refused to deserialize, so `client.stream.get_token()` errored for every caller. **`StreamToken.expires_at` is now `Option<String>`** (always `None`; kept for wire compatibility — do not schedule refreshes on it), `next_refresh_at` stays `Option<String>` (always `None`), and two fields are new: `rotated: Option<bool>` (`Some(true)` when the call replaced an existing token) and `lifetime: Option<String>` (the server's plain-English statement of the above). New method **`client.stream.rotate_token()`** sends `{"rotate": true}` for the leaked-token case. A WebSocket close code `4001` means "call `get_token()` again and reconnect", never "the token timed out".
+
 > **New in 0.8.0 — tokenized equities + the liquidity-removals feed.** Two new methods. `client.tokens.equities(&params)` (`GET /rhc/equities`, **BASIC+**, `types::EquitiesParams` → `types::EquitiesResponse`) lists every official Robinhood tokenized stock and ETF (NVDA, SPY, AAPL, …) with live price / MC / liquidity and 24h trades, ETH volume and buyer-seller split, sortable with `types::EquitiesSort` (`Volume` default / `Trades` / `MarketCap` / `LastTrade` / `Symbol`), filterable by exact `symbol` or substring `q`. **Identity is the issuer beacon, never the name**: a token is listed only if its contract is an EIP-1967 beacon proxy on Robinhood's issuer beacon `0xe10b6f6b…151b00`, read from our own node — on ship day there were 20 fake "GameStop • Robinhood Token" contracts and 8 fake NVDAs with the exact official suffix, and none of them appear. `client.trades.lp_events(&params)` (`GET /rhc/lp-events`, **PRO+**, `types::LpEventsParams` → `types::LpEventsResponse`) is the rug signal: Uniswap v2/v3 `Burn` and v4 `ModifyLiquidity` with a negative delta on tracked pools, from our node's log subscription, filterable by `token` / `pool` / `provider` / `dex` and cursor-paginated on `next_before`. **Removals only** — adds are not persisted (`coverage.adds_persisted == false`), amounts (`liquidity`, `amount0`, `amount1`, `token_amount_raw`, `quote_amount_raw`) are raw uint256 `String`s, v4 rows carry `liquidity` only, and `provider_is_token_deployer` is the classic rug tell. Data since 2026-08-05.
 
 > **New in 0.7.0 — `holder_growth`: who arrived and who left.** `client.tokens().holders(address, &params)` now returns `holder_growth` on `GET /rhc/tokens/{address}/holders`: `{ "1h", "24h", "7d" }` × `{ cutoff_block, entered, entered_still_holding, exited, net }`. *entered* = addresses whose first `Transfer` of the token landed at-or-after the window's cutoff block (any current balance); *entered_still_holding* = those still non-zero; *exited* = pre-existing holders whose last movement in the window left them at zero; *net* ≈ the change in `holder_count`. Pools and burn addresses are excluded from every count. This exists because RHC balances are folded from ERC-20 Transfer logs on our own node — the fold keeps first-seen and last-moved blocks per address and retains zero-balance rows — so it is a direct read, not an estimate; the Solana census is a point-in-time ledger scan with no history and cannot answer this. A window is `null` (never 0) only when the chain had no ingested trades in it; the whole block is `null` only if the growth read failed. Sanity check from ship day: a token launched that morning showed 593 entered / 560 still holding over 24h, and `holder_count` was exactly 560. Deserialize it with `serde_json::from_value::<Option<types::HolderGrowth>>(resp["holder_growth"].clone())`.
@@ -77,7 +79,7 @@ The `RobinhoodChain` client exposes namespaced sub-clients:
 | `client.alpha_wallets` | Smart-money wallet ranking |
 | `client.copytrade` | Copy-trade rule engine: rules + fired-signal history (PRO+) |
 | `client.price_alerts` | Price-alert rule engine: alerts + dip/recovery events (PRO+) |
-| `client.stream` | WebSocket streaming token issuance + the six `rhc:*` channels (see [Streaming](#streaming)) |
+| `client.stream` | WebSocket streaming token issuance (**non-expiring since 2026-08-27**) + rotation *(new 0.8.1)* + the six `rhc:*` channels (see [Streaming](#streaming)) |
 
 ## Endpoint → method map (54 operations listed, 42 paths — plus the 10 `client.wallet` operations documented in the 0.6.0 note above)
 
@@ -302,6 +304,21 @@ let ws = client.stream.get_token().await?; // POST /stream/token (PRO+)
 // Connect to `ws.ws_url` with `?token=<ws.token>` appended, then subscribe to
 // robinhood_chain::api::stream::RHC_KOL_TRADES / RHC_DEX_TRADES / the four
 // rule-engine channel constants.
+```
+
+**Stream tokens do not expire** *(since 2026-08-27)*. `get_token()` returns the
+same token on every call — call it on every reconnect and never schedule a
+refresh: `expires_at` / `next_refresh_at` are always `None` (kept for wire
+compatibility only). The token stops working only when your subscription
+lapses, or when you replace it yourself with `client.stream.rotate_token()`
+(`POST /stream/token` with `{"rotate": true}`) — the old value then keeps
+working for 60 s so live sockets can reconnect. A WebSocket close code `4001`
+means "call `get_token()` again and reconnect", never "the token timed out".
+
+```rust
+// Only if a token leaked — there is no reason to rotate on a schedule.
+let fresh = client.stream.rotate_token().await?;
+assert_eq!(fresh.rotated, Some(true));
 ```
 
 ## Error handling

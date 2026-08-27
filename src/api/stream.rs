@@ -98,14 +98,36 @@ pub struct Stream {
 }
 
 impl Stream {
-    /// Generate a 24-hour WebSocket streaming token (`POST /stream/token`, PRO+).
+    /// Issue your WebSocket streaming token (`POST /stream/token`, PRO+).
+    ///
+    /// **Stream tokens do not expire** (since 2026-08-27): this returns the
+    /// SAME token on every call, so it is safe to call on every reconnect and
+    /// there is nothing to refresh on a timer. The token only stops working
+    /// when your subscription lapses or you replace it with
+    /// [`rotate_token`](Self::rotate_token). A WebSocket close code `4001`
+    /// means "call this again and reconnect", never "the token timed out".
     ///
     /// Returns `ws_url` for KOL/DEX event streaming; ULTRA also returns
     /// `dex_ws_url` for the all-DEX firehose. Connect by appending
-    /// `?token=<token>` to the URL, then subscribe to [`RHC_KOL_TRADES`],
-    /// [`RHC_DEX_TRADES`] (ULTRA+), or the four rule-engine channels.
+    /// `?token=<token>` to the URL (or send it as
+    /// `Authorization: Bearer <token>` on the handshake), then subscribe to
+    /// [`RHC_KOL_TRADES`], [`RHC_DEX_TRADES`] (ULTRA+), or the four
+    /// rule-engine channels.
     pub async fn get_token(&self) -> Result<StreamToken> {
         self.core.post_empty("/stream/token").await
+    }
+
+    /// v0.8.1 — Rotate your streaming token (`POST /stream/token` with
+    /// `{"rotate": true}`, PRO+).
+    ///
+    /// Mints a fresh token and retires the current one; the replaced value
+    /// keeps working for 60 s so live sockets can reconnect on the new one.
+    /// Use this if a token leaks — there is no reason to rotate on a schedule,
+    /// because tokens do not expire. The response has `rotated == Some(true)`.
+    pub async fn rotate_token(&self) -> Result<StreamToken> {
+        self.core
+            .post("/stream/token", &serde_json::json!({ "rotate": true }))
+            .await
     }
 
     /// List your live WebSocket sessions (`GET /stream/sessions`, PRO+).
