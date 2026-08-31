@@ -145,7 +145,7 @@ The `RobinhoodChain` client exposes namespaced sub-clients:
 | 53 | `PATCH /rhc/kol/first-touches/subscriptions/{id}` | `client.kol.first_touch_subscriptions_update(uuid, &params)` | ULTRA+ |
 | 54 | `DELETE /rhc/kol/first-touches/subscriptions/{id}` | `client.kol.first_touch_subscriptions_delete(uuid)` | ULTRA+ |
 
-`BASIC+` = any valid key (including the free tier). `PRO+` = Pro or Ultra.
+`BASIC+` = any valid key (including the free tier — note free keys read live feeds like the KOL tape on a 5-minute delay; paid tiers are real-time). `PRO+` = Pro or Ultra.
 `ULTRA+` = Ultra or Business. Some BASIC+ endpoints return richer field-gated
 payloads on higher tiers (e.g. the launch-`bundle` cohort: BASIC gets the scalar
 signal, PRO the top-10 wallets, ULTRA the full cohort with alpha-wallet
