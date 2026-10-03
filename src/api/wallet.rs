@@ -79,6 +79,25 @@ impl Wallet {
         self.core.get(&format!("/rhc/wallet/{address}/trades"), params).await
     }
 
+    /// Shared-funder evidence (`GET /rhc/wallet/{address}/funding`, PRO+).
+    ///
+    /// Addresses that sent a qualifying native ETH or ERC-20 transfer to this
+    /// wallet AND to other tracked wallets, with the supporting transactions,
+    /// plus the additive `direct_funding` block. Evidence of a funding
+    /// connection — not proof of common ownership. Forward-looking coverage
+    /// from monitoring start; internal ETH transfers are not observed.
+    ///
+    /// `relationships` counts inside `direct_funding` are **ULTRA+** only.
+    /// A 503 with `code: funding_data_unavailable` is a data error, not an
+    /// empty result.
+    pub async fn funding(
+        &self,
+        address: &str,
+        params: &WalletFundingParams,
+    ) -> Result<WalletFundingResponse> {
+        self.core.get(&format!("/rhc/wallet/{address}/funding"), params).await
+    }
+
     /// Your Robinhood Chain watchlist
     /// (`GET /rhc/wallet-tracker/watchlist`, PRO+).
     ///

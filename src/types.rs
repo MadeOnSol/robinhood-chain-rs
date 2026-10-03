@@ -481,6 +481,34 @@ pub struct RhcKolTrade {
     pub tx_hash: String,
     pub block_number: i64,
     pub traded_at: String,
+    /// The KOL's row in mv_rhc_kol_scores. `None` = no row yet (too few
+    /// closed positions), never "not looked up".
+    #[serde(default)]
+    pub kol_score: Option<RhcKolScore>,
+}
+
+/// KOL score snapshot attached to each `/rhc/kol/feed` trade.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcKolScore {
+    /// 0–1, CLOSED positions only (sold ≥ 90 % of bought).
+    #[serde(default)]
+    pub winrate_7d: Option<f64>,
+    #[serde(default)]
+    pub winrate_30d: Option<f64>,
+    /// Hold-time bucket: scalper | day_trader | swing | inactive | unscored.
+    #[serde(default)]
+    pub strategy: Option<String>,
+    #[serde(default)]
+    pub closed_positions_30d: Option<i64>,
+}
+
+/// Echo of the KOL-score filters on `/rhc/kol/feed` (`None` = not applied).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolFeedFilteredBy {
+    #[serde(default)]
+    pub min_kol_winrate: Option<f64>,
+    #[serde(default)]
+    pub strategy: Option<String>,
 }
 
 /// Response of [`Kol::feed`](crate::api::kol::Kol::feed).
@@ -490,6 +518,21 @@ pub struct KolFeedResponse {
     pub chain: String,
     pub trades: Vec<RhcKolTrade>,
     pub count: u32,
+    /// Echo of the score filters.
+    #[serde(default)]
+    pub filtered_by: Option<KolFeedFilteredBy>,
+    /// KOLs matching `min_kol_winrate`/`strategy`; `None` when neither is set.
+    #[serde(default)]
+    pub matched_kols: Option<i64>,
+    /// Opaque keyset cursor for the next (older) page — pass as `cursor`. Preferred over `next_before`.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    /// `false` only when the feed is exhausted.
+    #[serde(default)]
+    pub has_more: Option<bool>,
+    /// Present when a filter was applied after the candidate fetch.
+    #[serde(default)]
+    pub scan: Option<FeedScan>,
     /// Age of the newest row, in seconds.
     #[serde(default)]
     pub data_age_seconds: Option<i64>,
@@ -971,6 +1014,30 @@ pub struct RhcLpEvent {
     pub block_time: String,
     pub tx_hash: String,
     pub log_index: i64,
+    /// Position range lower tick (v3/v4); `None` on v2 and on rows before 2026-09-23.
+    #[serde(default)]
+    pub tick_lower: Option<i64>,
+    /// Position range upper tick (v3/v4).
+    #[serde(default)]
+    pub tick_upper: Option<i64>,
+    /// Signed liquidity change (+ add, - remove), v3/v4. String — int256.
+    #[serde(default)]
+    pub liquidity_delta: Option<String>,
+    /// tick_lower <= current tick < tick_upper just before the event; `None` when unknown.
+    #[serde(default)]
+    pub in_range: Option<bool>,
+    /// Change to ACTIVE liquidity: `liquidity_delta` in range, "0" out of range. String — int256.
+    #[serde(default)]
+    pub active_liquidity_delta: Option<String>,
+    /// |active delta| / active liquidity before (v3/v4); adds can exceed 1.
+    #[serde(default)]
+    pub active_share: Option<f64>,
+    /// v2 only: amount / reserve before, from the pair's Sync.
+    #[serde(default)]
+    pub share_of_reserves: Option<f64>,
+    /// `true` = a REMOVAL of ≥ 25 % of reserves / active liquidity; `None` for adds, creations, unknown shares.
+    #[serde(default)]
+    pub material: Option<bool>,
 }
 
 /// The `coverage` honesty block on [`LpEventsResponse`].
@@ -1073,6 +1140,33 @@ pub struct TokensListResponse {
     pub tokens: Vec<RhcTokenSummary>,
     pub count: u32,
     pub sort: String,
+    /// sort=newest only — echoes the request's `since`.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// sort=newest only — feed back as `since` to poll for newer launches.
+    #[serde(default)]
+    pub next_since: Option<String>,
+    /// sort=newest / sort=oldest only — first_seen_at semantics + cursor contract.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// sort=oldest only — echoes the request's `after`.
+    #[serde(default)]
+    pub after: Option<String>,
+    /// sort=oldest only — `false` ONLY when the candidates ran out.
+    #[serde(default)]
+    pub has_more: Option<bool>,
+    /// sort=oldest only — echoes the request's `cursor`.
+    #[serde(default)]
+    pub cursor: Option<String>,
+    /// sort=oldest only (PREFERRED) — feed back as `cursor`; `None` = walk complete.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    /// sort=oldest only, LEGACY inclusive cursor — feed back as `after` (dedupe on token_address).
+    #[serde(default)]
+    pub next_after: Option<String>,
+    /// Present when a filter had to be scanned after the candidate fetch.
+    #[serde(default)]
+    pub scan: Option<FeedScan>,
 }
 
 // ─── Tokens: tokenized equities ──────────────────────────────────────────────
@@ -1307,6 +1401,31 @@ pub struct TokenDetailResponse {
     /// not schema-pinned upstream.
     #[serde(default)]
     pub pools: Vec<serde_json::Value>,
+    /// `known` | `unresolved` | `unavailable` — whether the creator is recorded (independent of reputation).
+    #[serde(default)]
+    pub deployer_identity_status: Option<String>,
+    /// The last trade that set the native price — the price's own age anchor.
+    #[serde(default)]
+    pub price_observed_at: Option<String>,
+    /// Seconds since `price_observed_at`.
+    #[serde(default)]
+    pub price_age_seconds: Option<i64>,
+    /// `true` when `price_age_seconds` > 900.
+    #[serde(default)]
+    pub price_is_stale: Option<bool>,
+    /// Row write time — can move without a trade; NOT a price-age anchor.
+    #[serde(default)]
+    pub price_updated_at: Option<String>,
+    /// `v4_virtual_ceiling` | `measured` — basis of `liquidity_usd`.
+    #[serde(default)]
+    pub liquidity_basis: Option<String>,
+    /// Constant statement of the uniswap-v4 ceiling semantics.
+    #[serde(default)]
+    pub liquidity_note: Option<String>,
+    /// Blocks whose lookup failed (e.g. `deployer_other_tokens`) — their values
+    /// are unknown, not empty. Empty when every lookup succeeded.
+    #[serde(default)]
+    pub degraded_fields: Vec<String>,
 }
 
 // ─── Tokens: token intel (top-traders / flow / peak-history / holders) ───────
@@ -1458,6 +1577,17 @@ pub struct CandlesResponse {
     pub timeframe: String,
     pub candles: Vec<RhcCandle>,
     pub count: u32,
+    /// Requested window bounds (ISO 8601), echoed.
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    /// `true` when the server's page budget ran out before `limit` candles or `from` were reached.
+    #[serde(default)]
+    pub truncated: Option<bool>,
+    /// Oldest instant actually searched; equals `from` when the whole window was scanned.
+    #[serde(default)]
+    pub covered_from: Option<String>,
 }
 
 // ─── Tokens: KOL consensus ───────────────────────────────────────────────────
@@ -1558,6 +1688,9 @@ pub struct BuyerQualityResponse {
     pub token_address: String,
     #[serde(default)]
     pub current_mc_usd: Option<f64>,
+    /// `distinct_first_buy` (first 20 DISTINCT buyer EOAs) or `legacy_row_window` (fallback).
+    #[serde(default)]
+    pub cohort_selection: Option<String>,
     pub quality: BuyerQuality,
     #[serde(default)]
     pub coverage: Option<BuyerQualityCoverage>,
@@ -1670,6 +1803,12 @@ pub struct TokenBatchDeployer {
 pub struct TokenBatchEntry {
     pub address: String,
     pub found: bool,
+    /// Why a price field is null: `ok` | `no_price_yet` | `mc_unavailable` | `not_seen_yet`.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Explanation, `found: false` only.
+    #[serde(default)]
+    pub hint: Option<String>,
     #[serde(default)]
     pub symbol: Option<String>,
     #[serde(default)]
@@ -2247,6 +2386,9 @@ pub struct DeployerAlertsResponse {
     /// The active setting, echoed back — `"liquidity_usd >= $100"` or
     /// `"off (include_untradeable=true)"`.
     pub tradability_filter: String,
+    /// Constant statement of the uniswap-v4 ceiling semantics (see per-row `liquidity_basis`).
+    #[serde(default)]
+    pub liquidity_note: Option<String>,
     /// Newest `event_at` on this page — pass as `since` to poll forward.
     #[serde(default)]
     pub next_event_at: Option<String>,
@@ -2440,6 +2582,20 @@ pub struct RhcAlphaWallet {
     pub avg_trade_mc_usd: Option<f64>,
     #[serde(default)]
     pub last_trade_at: Option<String>,
+    /// Share of gross ETH extracted from tokens the wallet never bought
+    /// (deployer/insider dumps). `None` = never sold. Wallets at ≥ 0.5 are
+    /// excluded unless `include_zero_cost_dumps=true`.
+    #[serde(default)]
+    pub zero_cost_share: Option<f64>,
+}
+
+/// Interim attribution disclosure on wallet-level aggregates: figures come from
+/// attributed trades only; `trader_eoa` was written reliably only from
+/// 2026-07-18, so earlier history is not reflected.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcAttributionNote {
+    pub attribution_complete_from: String,
+    pub note: String,
 }
 
 /// Response of
@@ -2452,6 +2608,9 @@ pub struct AlphaWalletsResponse {
     pub limit: i64,
     pub offset: i64,
     pub has_more: bool,
+    /// Interim attribution disclosure (pre-2026-07-18 history not reflected).
+    #[serde(default)]
+    pub attribution: Option<RhcAttributionNote>,
 }
 
 // ─── Streaming ───────────────────────────────────────────────────────────────
@@ -4439,4 +4598,338 @@ pub struct EarlyBuyersResponse {
     pub source: Option<serde_json::Value>,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+// ─── Typed bodies for the token endpoints that return `serde_json::Value` ───
+//
+// `Tokens::top_traders`, `flow`, `risk` and `holders` return the raw JSON
+// (changing the return type would break callers). Deserialize into these
+// structs with `serde_json::from_value::<T>(value)` for typed access.
+
+/// One row of `GET /rhc/tokens/{address}/top-traders`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcTopTrader {
+    /// Trader address (lowercase 0x).
+    pub trader_eoa: String,
+    #[serde(default)]
+    pub buy_eth: Option<f64>,
+    #[serde(default)]
+    pub sell_eth: Option<f64>,
+    /// sell_eth − buy_eth. Realized only.
+    #[serde(default)]
+    pub net_eth: Option<f64>,
+    #[serde(default)]
+    pub trades: Option<i64>,
+    #[serde(default)]
+    pub last_trade_at: Option<String>,
+    /// Mean market cap at time of trade (USD).
+    #[serde(default)]
+    pub avg_trade_mc: Option<f64>,
+    /// Wallet-level historical win-rate [0,1].
+    #[serde(default)]
+    pub win_rate: Option<f64>,
+    #[serde(default)]
+    pub likely_bot: Option<bool>,
+    #[serde(default)]
+    pub is_known_kol: Option<bool>,
+    #[serde(default)]
+    pub kol_name: Option<String>,
+    /// Trader's net across ALL tokens, for context.
+    #[serde(default)]
+    pub wallet_net_eth: Option<f64>,
+    #[serde(default)]
+    pub wallet_tokens: Option<i64>,
+    /// Dump-cluster cohort count; > 0 means recycled dumper.
+    #[serde(default)]
+    pub dump_cohorts: Option<i64>,
+    /// 1–20 when this trader was an early buyer.
+    #[serde(default)]
+    pub early_buyer_rank: Option<i64>,
+}
+
+/// Body of `GET /rhc/tokens/{address}/top-traders`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TopTradersResponse {
+    pub chain: String,
+    pub token_address: String,
+    pub traders: Vec<RhcTopTrader>,
+    pub count: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub has_more: bool,
+    /// States the net_eth semantics explicitly.
+    #[serde(default)]
+    pub metric: Option<String>,
+    /// Interim attribution disclosure (pre-2026-07-18 history not reflected).
+    #[serde(default)]
+    pub attribution: Option<RhcAttributionNote>,
+}
+
+/// One cohort of `GET /rhc/tokens/{address}/flow`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFlowCohort {
+    /// kol | bot | dump_cluster | early_buyer | unprofiled | smart_money | retail.
+    pub cohort: String,
+    pub traders: i64,
+    pub trades: i64,
+    pub buy_eth: f64,
+    pub sell_eth: f64,
+    /// sell − buy. POSITIVE = the cohort DISTRIBUTED.
+    pub net_eth: f64,
+}
+
+/// Sum across cohorts; always equals the parts.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFlowTotals {
+    pub traders: i64,
+    pub trades: i64,
+    pub buy_eth: f64,
+    pub sell_eth: f64,
+    pub net_eth: f64,
+}
+
+/// Body of `GET /rhc/tokens/{address}/flow`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FlowResponse {
+    pub chain: String,
+    pub token_address: String,
+    pub window: String,
+    /// Empty when the token had no trades in the window.
+    pub cohorts: Vec<RhcFlowCohort>,
+    #[serde(default)]
+    pub totals: Option<RhcFlowTotals>,
+    #[serde(default)]
+    pub sign_convention: Option<String>,
+    /// Interim attribution disclosure (pre-2026-07-18 history not reflected).
+    #[serde(default)]
+    pub attribution: Option<RhcAttributionNote>,
+}
+
+/// `capabilities` block of `GET /rhc/tokens/{address}/risk`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenRiskCapabilities {
+    #[serde(default)]
+    pub can_mint: bool,
+    #[serde(default)]
+    pub can_pause: bool,
+    #[serde(default)]
+    pub has_access_control: bool,
+    #[serde(default)]
+    pub selectors_found: Vec<String>,
+}
+
+/// Whether every risk input was actually read. A failed read is an UNKNOWN
+/// input, never a silent all-clear.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenRiskAssessment {
+    /// `complete` | `incomplete`.
+    pub status: String,
+    #[serde(default)]
+    pub unknown_inputs: Vec<String>,
+}
+
+/// Body of `GET /rhc/tokens/{address}/risk`. Absent capability flags are the
+/// norm on this chain and are not a safety guarantee.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenRiskResponse {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+    /// Runtime bytecode length in bytes.
+    #[serde(default)]
+    pub code_size: Option<i64>,
+    #[serde(default)]
+    pub is_contract: Option<bool>,
+    /// `{ kind, implementation, admin, upgradeable }`.
+    #[serde(default)]
+    pub proxy: Option<serde_json::Value>,
+    /// `{ model: none|renounced|eoa|contract, address }`.
+    #[serde(default)]
+    pub owner: Option<serde_json::Value>,
+    #[serde(default)]
+    pub capabilities: Option<TokenRiskCapabilities>,
+    /// `{ primary_pool, dex, lp_custody, lp_burned_pct, last_removed_at }`.
+    #[serde(default)]
+    pub liquidity: Option<serde_json::Value>,
+    /// `{ sellable: yes|no|unknown, reason }`.
+    #[serde(default)]
+    pub sellability: Option<serde_json::Value>,
+    #[serde(default)]
+    pub flags: Vec<String>,
+    /// 0–100, conservative. Absence of evidence is not evidence of safety.
+    #[serde(default)]
+    pub score: Option<i64>,
+    #[serde(default)]
+    pub assessment: Option<TokenRiskAssessment>,
+    #[serde(default)]
+    pub coverage: Option<serde_json::Value>,
+}
+
+/// One holder of `GET /rhc/tokens/{address}/holders`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcHolder {
+    pub holder: String,
+    /// Raw uint256 as a decimal STRING — never parse into a float.
+    pub balance: String,
+    /// Share of circulating (pools/burns excluded), [0,1].
+    #[serde(default)]
+    pub share: Option<f64>,
+    #[serde(default)]
+    pub last_block: Option<i64>,
+    #[serde(default)]
+    pub is_pool: bool,
+    #[serde(default)]
+    pub is_burn: bool,
+    #[serde(default)]
+    pub is_deployer: bool,
+}
+
+/// Body of `GET /rhc/tokens/{address}/holders`. Check `verified` before relying on the numbers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HoldersResponse {
+    pub chain: String,
+    pub token_address: String,
+    /// True only when reconstructed supply matches on-chain totalSupply().
+    pub verified: bool,
+    #[serde(default)]
+    pub unverified_reason: Option<String>,
+    pub holders: Vec<RhcHolder>,
+    pub count: i64,
+    pub has_more: bool,
+    /// Keyset cursor for the next page (`after=`); `None` on the last page.
+    #[serde(default)]
+    pub next_after: Option<String>,
+    /// Concentration stats; `circulating` is a uint256 string.
+    #[serde(default)]
+    pub concentration: Option<serde_json::Value>,
+    /// Entered / exited holders per window.
+    #[serde(default)]
+    pub holder_growth: Option<HolderGrowth>,
+    /// recon_supply vs chain_supply (uint256 strings) at recon_block.
+    #[serde(default)]
+    pub reconciliation: Option<serde_json::Value>,
+    #[serde(default)]
+    pub source: Option<serde_json::Value>,
+}
+
+// ─── Wallet funding evidence (GET /rhc/wallet/{address}/funding) ─────────────
+
+/// Query parameters for [`Wallet::funding`](crate::api::wallet::Wallet::funding).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WalletFundingParams {
+    /// Shared funders per page, 1..=20, default 10.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// 0..=100, default 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+/// Aggregated transfers of one asset from a funder. Raw amounts are exact
+/// integer strings (uint256-safe).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFundingTransfer {
+    /// `native` (ETH) or the ERC-20 contract address.
+    pub asset: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<i64>,
+    /// Exact integer in raw units — a string, never a float.
+    pub amount_raw: String,
+    /// Exact decimal string when decimals are known.
+    #[serde(default)]
+    pub amount: Option<String>,
+    pub transfer_count: i64,
+    /// Chain block time when resolved, otherwise the collector's observation time.
+    pub first_seen: String,
+    pub last_seen: String,
+    #[serde(default)]
+    pub transactions: Vec<RhcFundingTx>,
+}
+
+/// One supporting transaction of a funding transfer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFundingTx {
+    pub tx: String,
+    pub explorer_url: String,
+}
+
+/// Known label for a funder address.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFunderLabel {
+    pub label: String,
+    pub category: String,
+    pub verified: bool,
+}
+
+/// Another tracked wallet that received money from the same funder.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFundingConnectedWallet {
+    pub address: String,
+    pub explorer_url: String,
+    /// Tracked-set membership (KOL EVM wallet, elite/good deployer, …).
+    #[serde(default)]
+    pub tracked_as: Vec<String>,
+    #[serde(default)]
+    pub transfers: Vec<RhcFundingTransfer>,
+}
+
+/// A funder shared between this wallet and other tracked wallets.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcSharedFunder {
+    pub funder: String,
+    pub funder_explorer_url: String,
+    #[serde(default)]
+    pub funder_label: Option<RhcFunderLabel>,
+    /// Known exchange/service: a common funding source, not a connection signal.
+    pub service_funder: bool,
+    #[serde(default)]
+    pub to_this_wallet: Vec<RhcFundingTransfer>,
+    #[serde(default)]
+    pub connected_wallets: Vec<RhcFundingConnectedWallet>,
+}
+
+/// Pagination over `shared_funders`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcFundingPagination {
+    pub limit: i64,
+    pub offset: i64,
+    pub total: i64,
+    pub has_more: bool,
+}
+
+/// Response of [`Wallet::funding`](crate::api::wallet::Wallet::funding).
+///
+/// `status`: ok | partial_coverage | not_tracked | collection_disabled |
+/// collection_stale | not_started. An empty `shared_funders` with `ok` means
+/// no shared funder was OBSERVED within coverage — never that the wallets are
+/// independent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WalletFundingResponse {
+    pub chain: String,
+    /// CAIP-2 id, e.g. `eip155:4663`.
+    pub chain_id: String,
+    /// `ETH`.
+    pub native_asset: String,
+    pub address: String,
+    pub status: String,
+    pub summary: String,
+    #[serde(default)]
+    pub shared_funders: Vec<RhcSharedFunder>,
+    pub pagination: RhcFundingPagination,
+    /// Collector state (collection_enabled, mode, heartbeat_at,
+    /// collector_current, monitoring_started_at, last_committed_position as a
+    /// string, tracked_intervals, known_gaps, …). Raw JSON: the server
+    /// documents it as an open object.
+    #[serde(default)]
+    pub coverage: serde_json::Value,
+    pub disclaimer: String,
+    /// Additive "where was this wallet funded from?" block; absent when it
+    /// could not be computed. `relationships` counts inside it are ULTRA+
+    /// only and absent for PRO. Raw JSON: coverage-dependent keys appear only
+    /// when the server may claim them.
+    #[serde(default)]
+    pub direct_funding: Option<serde_json::Value>,
 }
