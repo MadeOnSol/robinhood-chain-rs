@@ -265,4 +265,53 @@ impl Tokens {
             .post("/rhc/tokens/batch/buyer-quality", &body)
             .await
     }
+
+    /// Token locks & vesting feed (`GET /rhc/tokens/locks`, PRO+).
+    ///
+    /// Newest lock / vesting contracts CREATED on Robinhood Chain across every
+    /// catalogued locker family. Create-only: withdrawals are not tracked
+    /// (`withdrawn` is `None`, `coverage.withdrawals_tracked == false`). LP
+    /// locks are excluded unless `subject` is `lp` or `all`. Page back with
+    /// `pagination.next_cursor` (preferred) and poll with `next_since`.
+    pub async fn locks_feed(&self, params: &TokenLocksParams) -> Result<TokenLocksResponse> {
+        self.core.get("/rhc/tokens/locks", params).await
+    }
+
+    /// Per-token lock summary (`GET /rhc/tokens/{address}/locks`, PRO+).
+    ///
+    /// Locked / deposited amounts, 7-day and 30-day unlocking amounts, the next
+    /// unlock, and counts by family and kind; LP locks are counted apart.
+    pub async fn locks(
+        &self,
+        address: &str,
+        params: &TokenLockSummaryParams,
+    ) -> Result<TokenLockSummaryResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/locks", address), params)
+            .await
+    }
+
+    /// Upcoming unlock events (`GET /rhc/tokens/unlocks`, PRO+).
+    ///
+    /// Cliff / tranche / final releases inside the `within` window (default
+    /// `7d`), sortable by soonest or largest. Token-subject locks only.
+    pub async fn unlocks(&self, params: &TokenUnlocksParams) -> Result<TokenUnlocksResponse> {
+        self.core.get("/rhc/tokens/unlocks", params).await
+    }
+
+    /// First buyers of a token, ranked, with still-holding status
+    /// (`GET /rhc/tokens/{address}/early-buyers`, PRO+).
+    ///
+    /// Up to 20 buyers by first observed buy (daily sweep, see `computed_at`).
+    /// `realized_eth` is a profit only where `position == "closed"`, and
+    /// `still_holding` is exact only when `holdings_verified` is `Some(true)`.
+    pub async fn early_buyers(
+        &self,
+        address: &str,
+        params: &EarlyBuyersParams,
+    ) -> Result<EarlyBuyersResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/early-buyers", address), params)
+            .await
+    }
 }
