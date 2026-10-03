@@ -363,4 +363,130 @@ mod tests {
         assert!(old.rotated.is_none());
         assert!(old.lifetime.is_none());
     }
+
+    /// 2026-10-03 parity: verified holdings on /positions + summary.holdings.
+    #[test]
+    fn positions_deserialize_verified_holdings() {
+        let r: crate::types::WalletPositionsResponse = serde_json::from_str(
+            r#"{"chain":"robinhood","address":"0xabc","window_days":90,
+                "summary":{"open_positions":1,"total_cost_basis_eth":1.0,"total_current_value_eth":2.0,
+                  "total_unrealized_eth":1.0,"unpriced_positions":0,
+                  "holdings":{"balance_source":"rhc_node_multicall3","checked_at":"2026-10-02T00:00:00Z",
+                    "complete":true,"fifo_open_positions":1,"held":0,"partially_reduced":0,
+                    "transferred_or_disposed":1,"external_inflow":0,"unverified":0,
+                    "verified_value_eth":0.0,"unpriced_held":0,"cost_basis_held_eth":0.0,
+                    "unrealized_known_eth":0.0,"cost_basis_not_held_eth":1.0}},
+                "positions":[{"token_address":"0xt","token_symbol":null,"token_name":null,
+                  "launchpad":null,"is_graduated":null,"token_amount":5.0,"cost_basis_eth":1.0,
+                  "avg_entry_price_eth":0.2,"current_price_eth":0.4,"current_value_eth":2.0,
+                  "unrealized_eth":1.0,"unrealized_pct":100.0,"current_mc_usd":null,
+                  "liquidity_usd":null,"liquidity_basis":"measured","buys_in_position":1,
+                  "realized_so_far_eth":0.0,"first_buy_at":null,"last_buy_at":null,
+                  "fifo_unmatched_amount":5.0,"current_onchain_balance":0.0,
+                  "holding_status":"TRANSFERRED_OR_DISPOSED","holding_unverified_reason":null,
+                  "current_holding_value_eth":0.0}],"notes":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(r.summary.holdings.unwrap().transferred_or_disposed, 1);
+        assert_eq!(
+            r.positions[0].holding_status.as_deref(),
+            Some("TRANSFERRED_OR_DISPOSED")
+        );
+    }
+
+    /// Lock / unlock / early-buyer shapes parse from wire samples, including the
+    /// all-null amount fields an unpriced token returns.
+    #[test]
+    fn token_lock_responses_parse() {
+        let feed: types::TokenLocksResponse = serde_json::from_str(r#"{
+            "chain":"robinhood",
+            "locks":[{
+                "lock_id":"0xabc:3","locker":"0x1111111111111111111111111111111111111111","locker_name":null,
+                "provider":{"id":null,"name":null,"identity":"compatible","compatible_with":"pinklock","website_url":null,"lock_url":null},
+                "explorer":{"locker_url":"https://explorer/x","creation_tx_url":null},
+                "family":"pinklock","family_name":"PinkLock-compatible","locker_lock_id":"7",
+                "kind":"lock","subject":"token","status":"active",
+                "token_address":"0x2222222222222222222222222222222222222222","lp":null,
+                "sender":"0x3333333333333333333333333333333333333333","recipient":null,"tx_sender":null,"name":null,
+                "amount_raw":"1000000","amount":null,"amount_usd":null,"price_usd":null,"amount_pct_of_supply":null,"amount_unit":"token",
+                "locked_raw":"1000000","locked":null,"locked_usd":null,"locked_pct_of_supply":null,
+                "unlocked_raw":"0","unlocked":null,"withdrawn_raw":null,"withdrawn":null,
+                "start_at":null,"cliff_at":null,"end_at":"2027-01-01T00:00:00Z",
+                "seconds_until_end":7776000,"seconds_until_next_unlock":null,
+                "cliff_amount_raw":null,"cliff_amount":null,"continuous":false,"perpetual":false,
+                "next_unlock":{"at":"2027-01-01T00:00:00Z","kind":"final","amount_raw":"1000000","amount":null,"amount_usd":null},
+                "cancelable":null,"cancelable_by_sender":null,"transferable":null,
+                "created_at":"2026-10-01T00:00:00Z","created_at_estimated":false,
+                "block_number":61824361,"block_time":"2026-10-01T00:00:00Z","tx_hash":"0xabc","log_index":3,"layout_verified":true
+            }],
+            "pagination":{"limit":50,"count":1,"has_more":false,"next_cursor":null,"next_since":"2026-10-01T00:00:00Z","next_before":"2026-10-01T00:00:00Z"},
+            "stream":{"channel":"rhc:token_locks"},
+            "coverage":{"families":["pinklock"],"withdrawals_tracked":false,"cancels_tracked":false,"lp_locks":"excluded","note":"n"},
+            "meta":{"families":["pinklock"],"note":"n"}
+        }"#).unwrap();
+        assert_eq!(feed.locks.len(), 1);
+        assert_eq!(feed.locks[0].provider.as_ref().unwrap().identity, "compatible");
+        assert!(feed.locks[0].withdrawn.is_none());
+        assert!(!feed.pagination.has_more);
+
+        let unlocks: types::TokenUnlocksResponse = serde_json::from_str(r#"{
+            "chain":"robinhood",
+            "window":{"within":"7d","from":"2026-10-03T00:00:00Z","to":"2026-10-10T00:00:00Z"},
+            "unlocks":[{
+                "unlock_at":"2026-10-05T00:00:00Z","in_seconds":172800,"event":"cliff",
+                "amount_raw":"5","amount":null,"amount_usd":null,"amount_pct_of_supply":null,
+                "window_amount_raw":"5","window_amount":null,"window_amount_usd":null,"window_amount_pct_of_supply":null,
+                "token_address":"0x2222222222222222222222222222222222222222",
+                "token":{"symbol":"X","name":null,"decimals":18,"price_usd":null,"market_cap_usd":null},
+                "lock":{"lock_id":"0xabc:3","locker":"0x1","locker_name":null,"family":"sablier","kind":"vesting","name":null,
+                        "sender":"0x3","recipient":null,"amount_raw":"5","amount":null,"amount_usd":null,
+                        "locked_raw":"5","locked":null,"locked_usd":null,"cliff_at":null,"end_at":null,
+                        "cancelable_by_sender":true,"tx_hash":"0xabc"}
+            }],
+            "pagination":{"limit":50,"count":1,"total_in_window":1,"has_more":false,"candidates_capped":false},
+            "coverage":{"families":[],"withdrawals_tracked":false,"cancels_tracked":false,"lp_locks":"n","note":"n"},
+            "meta":{"families":[],"note":"n","source":"s"}
+        }"#).unwrap();
+        assert_eq!(unlocks.unlocks[0].event, "cliff");
+        assert_eq!(unlocks.window.within, "7d");
+
+        let summary: types::TokenLockSummaryResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","token_address":"0x2222222222222222222222222222222222222222",
+            "token":{"symbol":null,"name":null,"decimals":null,"price_usd":null,"supply":null,"market_cap_usd":null,"liquidity_usd":null,"facts_resolved":false},
+            "summary":{"lock_count":0,"complete":true,"rows_considered":0,"token_lock_count":0,"lp_lock_count":0,"lp_lock_active_count":0,"active_count":0,
+                "by_family":{},"by_kind":{},"distinct_lockers":0,"distinct_locker_contracts":0,
+                "locked_raw":"0","locked":null,"locked_usd":null,"locked_pct_of_supply":null,
+                "deposited_raw":"0","deposited":null,"deposited_usd":null,
+                "unlocking_7d_raw":"0","unlocking_7d":null,"unlocking_7d_usd":null,"unlocking_7d_pct_of_supply":null,
+                "unlocking_30d_raw":"0","unlocking_30d":null,"unlocking_30d_usd":null,"unlocking_30d_pct_of_supply":null,
+                "next_unlock":null,"active_cancelable_by_sender":0},
+            "locks":[],
+            "coverage":{"families":[],"withdrawals_tracked":false,"cancels_tracked":false,"lp_locks":"n","note":"n"},
+            "meta":{"families":[],"note":"n","source":"s"}
+        }"#).unwrap();
+        assert_eq!(summary.summary.lock_count, 0);
+
+        // Unranked token: empty list, summary null, note present.
+        let empty: types::EarlyBuyersResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","token_address":"0x2222222222222222222222222222222222222222",
+            "early_buyers":[],"count":0,"computed_at":null,"holdings_verified":null,"summary":null,"note":"not yet ranked"
+        }"#).unwrap();
+        assert!(empty.summary.is_none());
+
+        let ranked: types::EarlyBuyersResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","token_address":"0x2222222222222222222222222222222222222222",
+            "early_buyers":[{"rank":1,"wallet":"0x4","first_buy_at":"2026-10-01T00:00:00Z","first_buy_block":1,
+                "still_holding":null,"balance":null,"position":"unknown","bought_eth":null,"sold_eth":null,
+                "realized_eth":null,"trades":null,"avg_entry_mc_usd":null}],
+            "count":1,"computed_at":"2026-10-02T00:00:00Z","holdings_verified":true,
+            "summary":{"ranked":1,"with_holding_data":0,"still_holding":0,"exited":0,"closed_positions":0,"realized_eth_closed_only":0},
+            "source":{"method":"first_buy_rank_from_trade_ingest","note":"n"}
+        }"#).unwrap();
+        assert_eq!(ranked.early_buyers[0].position, "unknown");
+        assert_eq!(ranked.holdings_verified, Some(true));
+
+        // Params serialize only what is set.
+        let q = serde_json::to_value(&types::TokenLocksParams { cursor: Some("c".into()), ..Default::default() }).unwrap();
+        assert_eq!(q, serde_json::json!({"cursor":"c"}));
+    }
 }

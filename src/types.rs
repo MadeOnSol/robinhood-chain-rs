@@ -2644,6 +2644,31 @@ pub struct RhcCopyTradeSubscription {
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// Source wallets that are tracked RHC KOL wallets — only these can fire.
+    /// `None` when the tracking read failed, or on servers before 2026-09-25.
+    #[serde(default)]
+    pub source_wallets_tracked: Option<Vec<String>>,
+    /// Source wallets that are not tracked: they never produce a signal.
+    #[serde(default)]
+    pub source_wallets_untracked: Option<Vec<String>>,
+    /// Present only when something needs attention (e.g. `untracked_source_wallets`).
+    #[serde(default)]
+    pub warnings: Option<Vec<CopyTradeRuleWarning>>,
+    /// Server 2026-10-02 — whether the rule can fire at all, separate from
+    /// `is_active` (your switch): `"eligible"` (at least one tracked source
+    /// wallet), `"no_tracked_sources"` (kept, but can never fire) or
+    /// `"unknown"` (the tracking read failed; never assumed eligible). `None`
+    /// on older servers.
+    #[serde(default)]
+    pub operational_state: Option<String>,
+}
+
+/// A non-fatal note on a copy-trade rule; the rule is saved unchanged.
+/// `code`: `"untracked_source_wallets"` | `"source_wallet_tracking_unavailable"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopyTradeRuleWarning {
+    pub code: String,
+    pub message: String,
 }
 
 /// Response of [`CopyTrade::list`](crate::api::copytrade::CopyTrade::list).
@@ -2704,6 +2729,10 @@ pub struct CopyTradeCreateResponse {
     /// Either the "save the secret" note, or the name of the WebSocket channel
     /// to subscribe to (`rhc:copytrade:signals`).
     pub note: String,
+    /// Mirror of `subscription.warnings` — present when any source wallet is
+    /// untracked or the tracking lookup was unavailable.
+    #[serde(default)]
+    pub warnings: Option<Vec<CopyTradeRuleWarning>>,
 }
 
 /// Response of [`CopyTrade::get`](crate::api::copytrade::CopyTrade::get) and
@@ -3416,6 +3445,13 @@ pub struct WalletProfileResponse {
     #[serde(default)]
     pub recent_trades: Vec<serde_json::Value>,
     pub derived: WalletDerived,
+    /// Server 2026-10-02 — on-chain verification of every FIFO-open position
+    /// (`balanceOf` from our own node). `top_tokens[].holding_status` carries
+    /// the per-token status (`null` when the token is FIFO-closed);
+    /// `top_tokens[].still_holding` keeps its FIFO meaning. `None` when the
+    /// snapshot was unavailable or on older servers.
+    #[serde(default)]
+    pub holdings: Option<HoldingsSummary>,
     /// Snapshot timed out — `flags` still resolve.
     #[serde(default)]
     pub stats_unavailable: bool,
@@ -3424,7 +3460,40 @@ pub struct WalletProfileResponse {
     pub cache_hit: bool,
 }
 
+/// Proven-holdings view over every FIFO-open position (server 2026-10-02):
+/// `balanceOf` + `decimals` from our own Robinhood Chain node. FIFO-open is a
+/// trading position, not a balance — only `verified_value_eth` counts proven
+/// balances.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HoldingsSummary {
+    /// `"rhc_node_multicall3"`.
+    pub balance_source: String,
+    pub checked_at: String,
+    /// `false` when at least one position is `BALANCE_UNVERIFIED` (it adds no value).
+    pub complete: bool,
+    pub fifo_open_positions: u64,
+    pub held: u64,
+    pub partially_reduced: u64,
+    pub transferred_or_disposed: u64,
+    pub external_inflow: u64,
+    pub unverified: u64,
+    /// Proven balances x current price; unverified and unpriced add nothing.
+    pub verified_value_eth: f64,
+    /// Verified positions with a non-zero balance but no current price.
+    pub unpriced_held: u64,
+    /// Cost basis of the FIFO-known portion still in the wallet.
+    pub cost_basis_held_eth: f64,
+    /// Unrealized PnL on the known-cost, still-held portion only.
+    pub unrealized_known_eth: f64,
+    /// Cost basis of FIFO lots no longer in the wallet — outcome unknown.
+    pub cost_basis_not_held_eth: f64,
+}
+
 /// One FIFO-unmatched buy position, marked to the current price.
+///
+/// On the positions endpoint (server 2026-10-02) each row also carries its on-chain
+/// check — the `holding_*` / balance fields below, all `None` on older
+/// servers and on the PnL endpoint open book.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenPosition {
     pub token_address: String,
@@ -3448,6 +3517,37 @@ pub struct OpenPosition {
     pub realized_so_far_eth: f64,
     pub first_buy_at: Option<String>,
     pub last_buy_at: Option<String>,
+    /// Same as `token_amount`: DEX buys not matched by a DEX sell.
+    #[serde(default)]
+    pub fifo_unmatched_amount: Option<f64>,
+    /// `balanceOf(wallet) / 10^decimals` from our node. `None` = not proven.
+    #[serde(default)]
+    pub current_onchain_balance: Option<f64>,
+    /// `"HELD"` (within 0.5 % of FIFO) | `"PARTIALLY_REDUCED"` |
+    /// `"TRANSFERRED_OR_DISPOSED"` (balance 0) | `"EXTERNAL_INFLOW"` (balance >
+    /// FIFO; the excess has no cost basis) | `"BALANCE_UNVERIFIED"` (read
+    /// failed — no value, never assumed held).
+    #[serde(default)]
+    pub holding_status: Option<String>,
+    /// `"rpc_unavailable"` | `"call_failed"` | `"decimals_failed"` |
+    /// `"over_cap"` | `"decimals_mismatch"` | `"decimals_unknown"`.
+    #[serde(default)]
+    pub holding_unverified_reason: Option<String>,
+    /// min(balance, FIFO): the held part whose cost basis is known.
+    #[serde(default)]
+    pub held_known_amount: Option<f64>,
+    #[serde(default)]
+    pub external_inflow_amount: Option<f64>,
+    /// `current_onchain_balance` x current price; 0 when transferred out.
+    #[serde(default)]
+    pub current_holding_value_eth: Option<f64>,
+    #[serde(default)]
+    pub cost_basis_held_eth: Option<f64>,
+    #[serde(default)]
+    pub unrealized_known_eth: Option<f64>,
+    /// Cost basis of the FIFO portion no longer in the wallet — outcome unknown.
+    #[serde(default)]
+    pub cost_basis_not_held_eth: Option<f64>,
 }
 
 /// One fully-closed FIFO position.
@@ -3545,6 +3645,11 @@ pub struct WalletPositionsSummary {
     pub total_unrealized_eth: f64,
     /// Excluded from the value and unrealized totals.
     pub unpriced_positions: u64,
+    /// Server 2026-10-02 — on-chain verification of the positions. The FIFO
+    /// totals above are trading figures; the proven value is
+    /// `holdings.verified_value_eth`. `None` on older servers.
+    #[serde(default)]
+    pub holdings: Option<HoldingsSummary>,
 }
 
 /// Response for [`Wallet::positions`](crate::api::wallet::Wallet::positions).
@@ -3746,4 +3851,592 @@ pub struct WalletTrackerSummaryResponse {
     pub stats_unavailable: bool,
     #[serde(default)]
     pub wallets: Vec<TrackedWalletSummary>,
+}
+
+// ─── Tokens: locks & vesting ─────────────────────────────────────────────────
+//
+// `GET /rhc/tokens/locks`, `GET /rhc/tokens/{address}/locks`,
+// `GET /rhc/tokens/unlocks` (all PRO+). Amounts are raw base units as decimal
+// STRINGS (`*_raw`); the `ui` / `usd` / `pct` companions are `None` when
+// decimals or price are unknown. Withdrawals are NOT tracked on Robinhood Chain
+// (create-only tape), so `withdrawn_*` is always `None`. Family / kind / status
+// strings are kept as `String` so a newly catalogued locker family never breaks
+// deserialization.
+
+/// Query parameters for [`Tokens::locks_feed`](crate::api::tokens::Tokens::locks_feed).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenLocksParams {
+    /// 1..=100, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// ISO instant — only locks created after it (poll with `pagination.next_since`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// LEGACY strict bound — only locks created before it. Prefer `cursor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Opaque strict (created_at, id) cursor — `pagination.next_cursor`. Not combinable with `before`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Token address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Depositor / creator wallet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    /// Beneficiary wallet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<String>,
+    /// Locker contract address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locker: Option<String>,
+    /// Locker family, e.g. `pinklock`, `hoodlock`, `sablier`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// `lock` | `vesting`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// `token` (default, excludes LP locks) | `lp` | `all`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// `active` | `completed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Post-filter on the deposited amount in USD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_usd: Option<f64>,
+    /// Post-filter on the deposited amount as % of supply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_pct_of_supply: Option<f64>,
+}
+
+/// Query parameters for [`Tokens::locks`](crate::api::tokens::Tokens::locks).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenLockSummaryParams {
+    /// `active` | `completed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// `token` | `lp` | `all` (default `all`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// 1..=500, default 200 (the summary always covers every row).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Query parameters for [`Tokens::unlocks`](crate::api::tokens::Tokens::unlocks).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenUnlocksParams {
+    /// `1h` | `6h` | `24h` | `3d` | `7d` (default) | `14d` | `30d` | `90d`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// `lock` | `vesting`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// On the next-event amount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_usd: Option<f64>,
+    /// On the next-event amount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_pct_of_supply: Option<f64>,
+    /// `soonest` (default) | `largest_usd` | `largest_pct`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    /// 1..=200, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// The next unlock event of a lock.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockNextUnlock {
+    pub at: String,
+    /// `cliff` | `final` | `tranche`.
+    pub kind: String,
+    pub amount_raw: String,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub amount_usd: Option<f64>,
+    /// Only on the per-token summary's `next_unlock`.
+    #[serde(default)]
+    pub lock_id: Option<String>,
+}
+
+/// Who runs the lock contract. Identity is decided by the locker CONTRACT
+/// ADDRESS, never by the family: `verified` = a known provider deployment,
+/// `compatible` = matching ABI but operator not identified (`id` / URLs are
+/// `None`), `unverified` = unknown shape.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockProvider {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `verified` | `compatible` | `unverified`.
+    pub identity: String,
+    #[serde(default)]
+    pub compatible_with: Option<String>,
+    #[serde(default)]
+    pub website_url: Option<String>,
+    #[serde(default)]
+    pub lock_url: Option<String>,
+}
+
+/// Blockscout links for the locker contract and the creation tx.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockExplorer {
+    #[serde(default)]
+    pub locker_url: Option<String>,
+    #[serde(default)]
+    pub creation_tx_url: Option<String>,
+}
+
+/// LP position details — only on `subject = "lp"` rows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockLp {
+    /// `v2_pair` | `v3_position` | `v4_position`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub pool: Option<String>,
+    #[serde(default)]
+    pub token0: Option<String>,
+    #[serde(default)]
+    pub token1: Option<String>,
+    #[serde(default)]
+    pub token_id: Option<String>,
+}
+
+/// One scheduled release of a tranche-based lock.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockScheduleEntry {
+    pub release_at: String,
+    pub amount_raw: String,
+    #[serde(default)]
+    pub amount: Option<f64>,
+}
+
+/// Token facts embedded on a lock-feed row.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockTokenFacts {
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<u32>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+    #[serde(default)]
+    pub market_cap_usd: Option<f64>,
+    #[serde(default)]
+    pub liquidity_usd: Option<f64>,
+    /// Per-token summary only.
+    #[serde(default)]
+    pub supply: Option<f64>,
+    /// Per-token summary only.
+    #[serde(default)]
+    pub facts_resolved: Option<bool>,
+}
+
+/// One lock / vesting contract.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenLock {
+    /// `<tx_hash>:<log_index>` — the row identity.
+    pub lock_id: String,
+    pub locker: String,
+    #[serde(default)]
+    pub locker_name: Option<String>,
+    #[serde(default)]
+    pub provider: Option<LockProvider>,
+    #[serde(default)]
+    pub explorer: Option<LockExplorer>,
+    pub family: String,
+    #[serde(default)]
+    pub family_name: Option<String>,
+    #[serde(default)]
+    pub locker_lock_id: Option<String>,
+    /// `lock` | `vesting`.
+    pub kind: String,
+    /// `token` | `lp`.
+    pub subject: String,
+    /// `active` | `completed`.
+    pub status: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub lp: Option<LockLp>,
+    /// Depositor / creator — the dev-lock comparison key.
+    pub sender: String,
+    #[serde(default)]
+    pub recipient: Option<String>,
+    #[serde(default)]
+    pub tx_sender: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub amount_raw: Option<String>,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub amount_usd: Option<f64>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+    /// % of CURRENT supply; `None` when unknown, above 100.5, or on LP rows.
+    #[serde(default)]
+    pub amount_pct_of_supply: Option<f64>,
+    /// `token` | `lp_token` | `liquidity` | `None` (NFT position).
+    #[serde(default)]
+    pub amount_unit: Option<String>,
+    #[serde(default)]
+    pub locked_raw: Option<String>,
+    #[serde(default)]
+    pub locked: Option<f64>,
+    #[serde(default)]
+    pub locked_usd: Option<f64>,
+    #[serde(default)]
+    pub locked_pct_of_supply: Option<f64>,
+    #[serde(default)]
+    pub unlocked_raw: Option<String>,
+    #[serde(default)]
+    pub unlocked: Option<f64>,
+    /// Always `None` — withdrawals are not tracked on Robinhood Chain.
+    #[serde(default)]
+    pub withdrawn_raw: Option<String>,
+    /// Always `None` — withdrawals are not tracked on Robinhood Chain.
+    #[serde(default)]
+    pub withdrawn: Option<f64>,
+    #[serde(default)]
+    pub start_at: Option<String>,
+    #[serde(default)]
+    pub cliff_at: Option<String>,
+    #[serde(default)]
+    pub end_at: Option<String>,
+    #[serde(default)]
+    pub seconds_until_end: Option<i64>,
+    #[serde(default)]
+    pub seconds_until_next_unlock: Option<i64>,
+    #[serde(default)]
+    pub cliff_amount_raw: Option<String>,
+    #[serde(default)]
+    pub cliff_amount: Option<f64>,
+    #[serde(default)]
+    pub continuous: bool,
+    #[serde(default)]
+    pub perpetual: bool,
+    #[serde(default)]
+    pub schedule: Option<Vec<LockScheduleEntry>>,
+    #[serde(default)]
+    pub next_unlock: Option<LockNextUnlock>,
+    #[serde(default)]
+    pub cancelable: Option<bool>,
+    #[serde(default)]
+    pub cancelable_by_sender: Option<bool>,
+    #[serde(default)]
+    pub transferable: Option<bool>,
+    pub created_at: String,
+    #[serde(default)]
+    pub created_at_estimated: bool,
+    pub block_number: u64,
+    #[serde(default)]
+    pub block_time: Option<String>,
+    pub tx_hash: String,
+    pub log_index: u64,
+    #[serde(default)]
+    pub layout_verified: bool,
+    #[serde(default)]
+    pub token: Option<LockTokenFacts>,
+}
+
+/// Coverage disclosure carried by every lock response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LockCoverage {
+    #[serde(default)]
+    pub families: Vec<String>,
+    /// Always `false` on Robinhood Chain.
+    #[serde(default)]
+    pub withdrawals_tracked: bool,
+    /// Always `false` on Robinhood Chain.
+    #[serde(default)]
+    pub cancels_tracked: bool,
+    #[serde(default)]
+    pub lp_locks: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Post-filter scan disclosure — `scan_truncated` means more matches MAY exist past `next_cursor`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeedScan {
+    pub post_filtered: bool,
+    pub scanned: u64,
+    pub scan_truncated: bool,
+    pub scan_budget: u64,
+}
+
+/// Pagination block of [`TokenLocksResponse`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenLocksPagination {
+    pub limit: u32,
+    pub count: u32,
+    pub has_more: bool,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub next_since: Option<String>,
+    #[serde(default)]
+    pub next_before: Option<String>,
+    #[serde(default)]
+    pub scan: Option<FeedScan>,
+}
+
+/// Response of [`Tokens::locks_feed`](crate::api::tokens::Tokens::locks_feed).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenLocksResponse {
+    pub chain: String,
+    #[serde(default)]
+    pub locks: Vec<TokenLock>,
+    pub pagination: TokenLocksPagination,
+    /// Pointer to the `rhc:token_locks` WS channel.
+    #[serde(default)]
+    pub stream: Option<serde_json::Value>,
+    #[serde(default)]
+    pub coverage: Option<LockCoverage>,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// Per-token aggregate of [`TokenLockSummaryResponse`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenLockSummary {
+    pub lock_count: u64,
+    pub complete: bool,
+    pub rows_considered: u64,
+    pub token_lock_count: u64,
+    pub lp_lock_count: u64,
+    pub lp_lock_active_count: u64,
+    pub active_count: u64,
+    #[serde(default)]
+    pub by_family: HashMap<String, u64>,
+    #[serde(default)]
+    pub by_kind: HashMap<String, u64>,
+    pub distinct_lockers: u64,
+    pub distinct_locker_contracts: u64,
+    pub locked_raw: String,
+    #[serde(default)]
+    pub locked: Option<f64>,
+    #[serde(default)]
+    pub locked_usd: Option<f64>,
+    #[serde(default)]
+    pub locked_pct_of_supply: Option<f64>,
+    pub deposited_raw: String,
+    #[serde(default)]
+    pub deposited: Option<f64>,
+    #[serde(default)]
+    pub deposited_usd: Option<f64>,
+    pub unlocking_7d_raw: String,
+    #[serde(default)]
+    pub unlocking_7d: Option<f64>,
+    #[serde(default)]
+    pub unlocking_7d_usd: Option<f64>,
+    #[serde(default)]
+    pub unlocking_7d_pct_of_supply: Option<f64>,
+    pub unlocking_30d_raw: String,
+    #[serde(default)]
+    pub unlocking_30d: Option<f64>,
+    #[serde(default)]
+    pub unlocking_30d_usd: Option<f64>,
+    #[serde(default)]
+    pub unlocking_30d_pct_of_supply: Option<f64>,
+    #[serde(default)]
+    pub next_unlock: Option<LockNextUnlock>,
+    pub active_cancelable_by_sender: u64,
+}
+
+/// Response of [`Tokens::locks`](crate::api::tokens::Tokens::locks).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenLockSummaryResponse {
+    pub chain: String,
+    pub token_address: String,
+    pub token: LockTokenFacts,
+    pub summary: TokenLockSummary,
+    #[serde(default)]
+    pub locks: Vec<TokenLock>,
+    #[serde(default)]
+    pub coverage: Option<LockCoverage>,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// The lock behind an unlock event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UnlockLock {
+    pub lock_id: String,
+    pub locker: String,
+    #[serde(default)]
+    pub locker_name: Option<String>,
+    pub family: String,
+    pub kind: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub sender: String,
+    #[serde(default)]
+    pub recipient: Option<String>,
+    pub amount_raw: String,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub amount_usd: Option<f64>,
+    pub locked_raw: String,
+    #[serde(default)]
+    pub locked: Option<f64>,
+    #[serde(default)]
+    pub locked_usd: Option<f64>,
+    #[serde(default)]
+    pub cliff_at: Option<String>,
+    #[serde(default)]
+    pub end_at: Option<String>,
+    #[serde(default)]
+    pub cancelable_by_sender: Option<bool>,
+    pub tx_hash: String,
+}
+
+/// One upcoming unlock event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenUnlock {
+    pub unlock_at: String,
+    pub in_seconds: i64,
+    /// `cliff` | `final` | `tranche`.
+    pub event: String,
+    pub amount_raw: String,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub amount_usd: Option<f64>,
+    #[serde(default)]
+    pub amount_pct_of_supply: Option<f64>,
+    pub window_amount_raw: String,
+    #[serde(default)]
+    pub window_amount: Option<f64>,
+    #[serde(default)]
+    pub window_amount_usd: Option<f64>,
+    #[serde(default)]
+    pub window_amount_pct_of_supply: Option<f64>,
+    pub token_address: String,
+    #[serde(default)]
+    pub token: Option<LockTokenFacts>,
+    pub lock: UnlockLock,
+}
+
+/// The `[from, to]` window of [`TokenUnlocksResponse`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct UnlocksWindow {
+    pub within: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// Pagination block of [`TokenUnlocksResponse`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenUnlocksPagination {
+    pub limit: u32,
+    pub count: u32,
+    pub total_in_window: u64,
+    pub has_more: bool,
+    pub candidates_capped: bool,
+}
+
+/// Response of [`Tokens::unlocks`](crate::api::tokens::Tokens::unlocks).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenUnlocksResponse {
+    pub chain: String,
+    pub window: UnlocksWindow,
+    #[serde(default)]
+    pub unlocks: Vec<TokenUnlock>,
+    pub pagination: TokenUnlocksPagination,
+    #[serde(default)]
+    pub coverage: Option<LockCoverage>,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+// ─── Tokens: early buyers ────────────────────────────────────────────────────
+
+/// Query parameters for [`Tokens::early_buyers`](crate::api::tokens::Tokens::early_buyers).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EarlyBuyersParams {
+    /// 1..=20, default 20.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One ranked early buyer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EarlyBuyer {
+    pub rank: u32,
+    pub wallet: String,
+    #[serde(default)]
+    pub first_buy_at: Option<String>,
+    #[serde(default)]
+    pub first_buy_block: Option<u64>,
+    /// `None` when there is no holding data for the wallet.
+    #[serde(default)]
+    pub still_holding: Option<bool>,
+    /// Raw token balance (decimal string) from the Transfer-log fold.
+    #[serde(default)]
+    pub balance: Option<String>,
+    /// `open` | `closed` | `unknown`.
+    pub position: String,
+    #[serde(default)]
+    pub bought_eth: Option<f64>,
+    #[serde(default)]
+    pub sold_eth: Option<f64>,
+    /// `sold_eth − bought_eth`; a profit only when `position == "closed"`.
+    #[serde(default)]
+    pub realized_eth: Option<f64>,
+    #[serde(default)]
+    pub trades: Option<u64>,
+    #[serde(default)]
+    pub avg_entry_mc_usd: Option<f64>,
+}
+
+/// Aggregate over the ranked cohort.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EarlyBuyersSummary {
+    pub ranked: u32,
+    pub with_holding_data: u32,
+    pub still_holding: u32,
+    pub exited: u32,
+    pub closed_positions: u32,
+    #[serde(default)]
+    pub realized_eth_closed_only: Option<f64>,
+}
+
+/// Response of [`Tokens::early_buyers`](crate::api::tokens::Tokens::early_buyers).
+/// An unranked token returns an empty list with `summary: None` and a `note`
+/// (ranks come from a daily sweep — not an assertion that there were no buyers).
+#[derive(Debug, Clone, Deserialize)]
+pub struct EarlyBuyersResponse {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub early_buyers: Vec<EarlyBuyer>,
+    pub count: u32,
+    #[serde(default)]
+    pub computed_at: Option<String>,
+    /// `still_holding` is exact only when this is `Some(true)`.
+    #[serde(default)]
+    pub holdings_verified: Option<bool>,
+    #[serde(default)]
+    pub summary: Option<EarlyBuyersSummary>,
+    #[serde(default)]
+    pub source: Option<serde_json::Value>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
