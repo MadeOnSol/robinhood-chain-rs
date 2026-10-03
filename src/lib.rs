@@ -363,4 +363,34 @@ mod tests {
         assert!(old.rotated.is_none());
         assert!(old.lifetime.is_none());
     }
+
+    /// 2026-10-03 parity: verified holdings on /positions + summary.holdings.
+    #[test]
+    fn positions_deserialize_verified_holdings() {
+        let r: crate::types::WalletPositionsResponse = serde_json::from_str(
+            r#"{"chain":"robinhood","address":"0xabc","window_days":90,
+                "summary":{"open_positions":1,"total_cost_basis_eth":1.0,"total_current_value_eth":2.0,
+                  "total_unrealized_eth":1.0,"unpriced_positions":0,
+                  "holdings":{"balance_source":"rhc_node_multicall3","checked_at":"2026-10-02T00:00:00Z",
+                    "complete":true,"fifo_open_positions":1,"held":0,"partially_reduced":0,
+                    "transferred_or_disposed":1,"external_inflow":0,"unverified":0,
+                    "verified_value_eth":0.0,"unpriced_held":0,"cost_basis_held_eth":0.0,
+                    "unrealized_known_eth":0.0,"cost_basis_not_held_eth":1.0}},
+                "positions":[{"token_address":"0xt","token_symbol":null,"token_name":null,
+                  "launchpad":null,"is_graduated":null,"token_amount":5.0,"cost_basis_eth":1.0,
+                  "avg_entry_price_eth":0.2,"current_price_eth":0.4,"current_value_eth":2.0,
+                  "unrealized_eth":1.0,"unrealized_pct":100.0,"current_mc_usd":null,
+                  "liquidity_usd":null,"liquidity_basis":"measured","buys_in_position":1,
+                  "realized_so_far_eth":0.0,"first_buy_at":null,"last_buy_at":null,
+                  "fifo_unmatched_amount":5.0,"current_onchain_balance":0.0,
+                  "holding_status":"TRANSFERRED_OR_DISPOSED","holding_unverified_reason":null,
+                  "current_holding_value_eth":0.0}],"notes":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(r.summary.holdings.unwrap().transferred_or_disposed, 1);
+        assert_eq!(
+            r.positions[0].holding_status.as_deref(),
+            Some("TRANSFERRED_OR_DISPOSED")
+        );
+    }
 }

@@ -2644,6 +2644,31 @@ pub struct RhcCopyTradeSubscription {
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// Source wallets that are tracked RHC KOL wallets — only these can fire.
+    /// `None` when the tracking read failed, or on servers before 2026-09-25.
+    #[serde(default)]
+    pub source_wallets_tracked: Option<Vec<String>>,
+    /// Source wallets that are not tracked: they never produce a signal.
+    #[serde(default)]
+    pub source_wallets_untracked: Option<Vec<String>>,
+    /// Present only when something needs attention (e.g. `untracked_source_wallets`).
+    #[serde(default)]
+    pub warnings: Option<Vec<CopyTradeRuleWarning>>,
+    /// Server 2026-10-02 — whether the rule can fire at all, separate from
+    /// `is_active` (your switch): `"eligible"` (at least one tracked source
+    /// wallet), `"no_tracked_sources"` (kept, but can never fire) or
+    /// `"unknown"` (the tracking read failed; never assumed eligible). `None`
+    /// on older servers.
+    #[serde(default)]
+    pub operational_state: Option<String>,
+}
+
+/// A non-fatal note on a copy-trade rule; the rule is saved unchanged.
+/// `code`: `"untracked_source_wallets"` | `"source_wallet_tracking_unavailable"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopyTradeRuleWarning {
+    pub code: String,
+    pub message: String,
 }
 
 /// Response of [`CopyTrade::list`](crate::api::copytrade::CopyTrade::list).
@@ -2704,6 +2729,10 @@ pub struct CopyTradeCreateResponse {
     /// Either the "save the secret" note, or the name of the WebSocket channel
     /// to subscribe to (`rhc:copytrade:signals`).
     pub note: String,
+    /// Mirror of `subscription.warnings` — present when any source wallet is
+    /// untracked or the tracking lookup was unavailable.
+    #[serde(default)]
+    pub warnings: Option<Vec<CopyTradeRuleWarning>>,
 }
 
 /// Response of [`CopyTrade::get`](crate::api::copytrade::CopyTrade::get) and
@@ -3416,6 +3445,13 @@ pub struct WalletProfileResponse {
     #[serde(default)]
     pub recent_trades: Vec<serde_json::Value>,
     pub derived: WalletDerived,
+    /// Server 2026-10-02 — on-chain verification of every FIFO-open position
+    /// (`balanceOf` from our own node). `top_tokens[].holding_status` carries
+    /// the per-token status (`null` when the token is FIFO-closed);
+    /// `top_tokens[].still_holding` keeps its FIFO meaning. `None` when the
+    /// snapshot was unavailable or on older servers.
+    #[serde(default)]
+    pub holdings: Option<HoldingsSummary>,
     /// Snapshot timed out — `flags` still resolve.
     #[serde(default)]
     pub stats_unavailable: bool,
@@ -3424,7 +3460,40 @@ pub struct WalletProfileResponse {
     pub cache_hit: bool,
 }
 
+/// Proven-holdings view over every FIFO-open position (server 2026-10-02):
+/// `balanceOf` + `decimals` from our own Robinhood Chain node. FIFO-open is a
+/// trading position, not a balance — only `verified_value_eth` counts proven
+/// balances.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HoldingsSummary {
+    /// `"rhc_node_multicall3"`.
+    pub balance_source: String,
+    pub checked_at: String,
+    /// `false` when at least one position is `BALANCE_UNVERIFIED` (it adds no value).
+    pub complete: bool,
+    pub fifo_open_positions: u64,
+    pub held: u64,
+    pub partially_reduced: u64,
+    pub transferred_or_disposed: u64,
+    pub external_inflow: u64,
+    pub unverified: u64,
+    /// Proven balances x current price; unverified and unpriced add nothing.
+    pub verified_value_eth: f64,
+    /// Verified positions with a non-zero balance but no current price.
+    pub unpriced_held: u64,
+    /// Cost basis of the FIFO-known portion still in the wallet.
+    pub cost_basis_held_eth: f64,
+    /// Unrealized PnL on the known-cost, still-held portion only.
+    pub unrealized_known_eth: f64,
+    /// Cost basis of FIFO lots no longer in the wallet — outcome unknown.
+    pub cost_basis_not_held_eth: f64,
+}
+
 /// One FIFO-unmatched buy position, marked to the current price.
+///
+/// On the positions endpoint (server 2026-10-02) each row also carries its on-chain
+/// check — the `holding_*` / balance fields below, all `None` on older
+/// servers and on the PnL endpoint open book.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenPosition {
     pub token_address: String,
@@ -3448,6 +3517,37 @@ pub struct OpenPosition {
     pub realized_so_far_eth: f64,
     pub first_buy_at: Option<String>,
     pub last_buy_at: Option<String>,
+    /// Same as `token_amount`: DEX buys not matched by a DEX sell.
+    #[serde(default)]
+    pub fifo_unmatched_amount: Option<f64>,
+    /// `balanceOf(wallet) / 10^decimals` from our node. `None` = not proven.
+    #[serde(default)]
+    pub current_onchain_balance: Option<f64>,
+    /// `"HELD"` (within 0.5 % of FIFO) | `"PARTIALLY_REDUCED"` |
+    /// `"TRANSFERRED_OR_DISPOSED"` (balance 0) | `"EXTERNAL_INFLOW"` (balance >
+    /// FIFO; the excess has no cost basis) | `"BALANCE_UNVERIFIED"` (read
+    /// failed — no value, never assumed held).
+    #[serde(default)]
+    pub holding_status: Option<String>,
+    /// `"rpc_unavailable"` | `"call_failed"` | `"decimals_failed"` |
+    /// `"over_cap"` | `"decimals_mismatch"` | `"decimals_unknown"`.
+    #[serde(default)]
+    pub holding_unverified_reason: Option<String>,
+    /// min(balance, FIFO): the held part whose cost basis is known.
+    #[serde(default)]
+    pub held_known_amount: Option<f64>,
+    #[serde(default)]
+    pub external_inflow_amount: Option<f64>,
+    /// `current_onchain_balance` x current price; 0 when transferred out.
+    #[serde(default)]
+    pub current_holding_value_eth: Option<f64>,
+    #[serde(default)]
+    pub cost_basis_held_eth: Option<f64>,
+    #[serde(default)]
+    pub unrealized_known_eth: Option<f64>,
+    /// Cost basis of the FIFO portion no longer in the wallet — outcome unknown.
+    #[serde(default)]
+    pub cost_basis_not_held_eth: Option<f64>,
 }
 
 /// One fully-closed FIFO position.
@@ -3545,6 +3645,11 @@ pub struct WalletPositionsSummary {
     pub total_unrealized_eth: f64,
     /// Excluded from the value and unrealized totals.
     pub unpriced_positions: u64,
+    /// Server 2026-10-02 — on-chain verification of the positions. The FIFO
+    /// totals above are trading figures; the proven value is
+    /// `holdings.verified_value_eth`. `None` on older servers.
+    #[serde(default)]
+    pub holdings: Option<HoldingsSummary>,
 }
 
 /// Response for [`Wallet::positions`](crate::api::wallet::Wallet::positions).
