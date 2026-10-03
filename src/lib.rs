@@ -489,4 +489,122 @@ mod tests {
         let q = serde_json::to_value(&types::TokenLocksParams { cursor: Some("c".into()), ..Default::default() }).unwrap();
         assert_eq!(q, serde_json::json!({"cursor":"c"}));
     }
+
+    /// Contract parity 2026-10-03: `/rhc/wallet/{address}/funding`, route-shaped
+    /// (src/lib/wallet-funding.ts + direct_funding), PRO view (no relationships).
+    #[test]
+    fn wallet_funding_deserializes_and_keeps_raw_amounts_exact() {
+        let r: types::WalletFundingResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","chain_id":"eip155:4663","native_asset":"ETH",
+            "address":"0xabababababababababababababababababababab","status":"ok",
+            "summary":"2 tracked wallets received ETH from the same address.",
+            "shared_funders":[{"funder":"0xcd","funder_explorer_url":"https://x/a","funder_label":null,"service_funder":false,
+                "to_this_wallet":[{"asset":"native","symbol":"ETH","decimals":18,"amount_raw":"123456789012345678901234567890",
+                    "amount":"123456789012.34567890123456789","transfer_count":2,"first_seen":"2026-09-21T10:00:00Z",
+                    "last_seen":"2026-09-22T10:00:00Z","transactions":[{"tx":"0xee","explorer_url":"https://x/tx"}]}],
+                "connected_wallets":[{"address":"0xef","explorer_url":"https://x/b","tracked_as":["kol"],"transfers":[]}]}],
+            "pagination":{"limit":5,"offset":0,"total":1,"has_more":false},
+            "coverage":{"collection_enabled":true,"mode":"on","heartbeat_at":null,"collector_current":true,
+                "monitoring_started_at":"2026-09-20T13:11:51Z","last_committed_position":"99999999999999999999",
+                "last_committed_at":null,"tracked_intervals":[],"known_gaps":[],"supported_transfer_types":[],
+                "unsupported_transfer_types":[],"recovery":null,"history":"h"},
+            "disclaimer":"d",
+            "direct_funding":{"observed":false,"coverage":"forward_only","coverage_explanation":"e","observation_started_at":null,"note":"n"}
+        }"#).unwrap();
+        assert_eq!(r.shared_funders[0].to_this_wallet[0].amount_raw, "123456789012345678901234567890");
+        assert_eq!(r.shared_funders[0].connected_wallets[0].tracked_as, vec!["kol".to_string()]);
+        assert_eq!(r.coverage["last_committed_position"], "99999999999999999999");
+        assert!(r.direct_funding.unwrap().get("relationships").is_none());
+
+        // direct_funding absent (degraded) still parses.
+        let bare: types::WalletFundingResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","chain_id":"eip155:4663","native_asset":"ETH","address":"0xab","status":"not_tracked",
+            "summary":"s","shared_funders":[],"pagination":{"limit":10,"offset":0,"total":0,"has_more":false},
+            "coverage":{},"disclaimer":"d"
+        }"#).unwrap();
+        assert!(bare.direct_funding.is_none());
+
+        let q = serde_json::to_value(&types::WalletFundingParams { limit: Some(5), ..Default::default() }).unwrap();
+        assert_eq!(q, serde_json::json!({"limit":5}));
+    }
+
+    /// Contract parity 2026-10-03: drift fields on existing types + typed bodies
+    /// for the raw-JSON token endpoints. Nullable fields stay `Option`.
+    #[test]
+    fn contract_drift_fields_deserialize() {
+        let lp: types::RhcLpEvent = serde_json::from_str(r#"{
+            "event":"remove","pool":"0xp","dex":"uniswap-v3","token_address":"0xt","block_number":1,
+            "block_time":"2026-10-01T00:00:00Z","tx_hash":"0xh","log_index":0,
+            "tick_lower":-887220,"tick_upper":887220,"liquidity_delta":"-340282366920938463463374607431768211455",
+            "in_range":true,"active_liquidity_delta":"-340282366920938463463374607431768211455",
+            "active_share":0.4,"share_of_reserves":null,"material":true
+        }"#).unwrap();
+        assert_eq!(lp.liquidity_delta.as_deref(), Some("-340282366920938463463374607431768211455"));
+        assert_eq!(lp.tick_lower, Some(-887220));
+        assert_eq!(lp.material, Some(true));
+        assert!(lp.share_of_reserves.is_none());
+
+        let trade: types::RhcKolTrade = serde_json::from_str(r#"{
+            "evm_address":"0xk","token_address":"0xt","action":"buy","dex":"uniswap-v4","tx_hash":"0xh",
+            "block_number":1,"traded_at":"2026-10-01T00:00:00Z",
+            "kol_score":{"winrate_7d":0.5,"winrate_30d":null,"strategy":"swing","closed_positions_30d":12}
+        }"#).unwrap();
+        assert_eq!(trade.kol_score.unwrap().closed_positions_30d, Some(12));
+
+        let aw: types::AlphaWalletsResponse = serde_json::from_str(r#"{
+            "chain":"robinhood","wallets":[{"wallet":"0xw","classification":"smart_money","is_known_kol":false,
+                "trades":3,"tokens":2,"buy_eth":1.0,"sell_eth":2.0,"net_eth":1.0,"zero_cost_share":null}],
+            "total":1,"limit":50,"offset":0,"has_more":false,
+            "attribution":{"attribution_complete_from":"2026-07-18T00:00:00Z","note":"n"}
+        }"#).unwrap();
+        assert!(aw.wallets[0].zero_cost_share.is_none());
+        assert_eq!(aw.attribution.unwrap().attribution_complete_from, "2026-07-18T00:00:00Z");
+
+        let tt: types::TopTradersResponse = serde_json::from_value(serde_json::json!({
+            "chain":"robinhood","token_address":"0xt","count":1,"limit":50,"offset":0,"has_more":false,
+            "metric":"net_eth = sell - buy",
+            "traders":[{"trader_eoa":"0xa","buy_eth":1.0,"sell_eth":null,"net_eth":null,"trades":2,"last_trade_at":null,
+                "avg_trade_mc":null,"win_rate":null,"likely_bot":null,"is_known_kol":null,"kol_name":null,
+                "wallet_net_eth":-0.5,"wallet_tokens":4,"dump_cohorts":0,"early_buyer_rank":3}],
+            "attribution":{"attribution_complete_from":"2026-07-18T00:00:00Z","note":"n"}
+        })).unwrap();
+        assert_eq!(tt.traders[0].early_buyer_rank, Some(3));
+
+        let flow: types::FlowResponse = serde_json::from_value(serde_json::json!({
+            "chain":"robinhood","token_address":"0xt","window":"24h",
+            "cohorts":[{"cohort":"kol","traders":1,"trades":2,"buy_eth":1.0,"sell_eth":0.5,"net_eth":-0.5}],
+            "totals":{"traders":1,"trades":2,"buy_eth":1.0,"sell_eth":0.5,"net_eth":-0.5},
+            "sign_convention":"positive = distributed",
+            "attribution":{"attribution_complete_from":"2026-07-18T00:00:00Z","note":"n"}
+        })).unwrap();
+        assert_eq!(flow.cohorts[0].cohort, "kol");
+
+        let risk: types::TokenRiskResponse = serde_json::from_value(serde_json::json!({
+            "chain":"robinhood","token_address":"0xt","checked_at":"2026-10-01T00:00:00Z","code_size":2048,"is_contract":true,
+            "proxy":{"kind":"none"},"owner":{"model":"renounced","address":null},
+            "capabilities":{"can_mint":false,"can_pause":false,"has_access_control":true,"selectors_found":["0x40c10f19"]},
+            "liquidity":{"lp_custody":"unknown"},"sellability":{"sellable":"unknown","reason":null},
+            "flags":[],"score":null,"assessment":{"status":"incomplete","unknown_inputs":["observed_sells"]},
+            "coverage":{"model":"evm_native"}
+        })).unwrap();
+        assert_eq!(risk.assessment.unwrap().unknown_inputs, vec!["observed_sells".to_string()]);
+        assert!(risk.score.is_none());
+
+        let holders: types::HoldersResponse = serde_json::from_value(serde_json::json!({
+            "chain":"robinhood","token_address":"0xt","verified":true,"unverified_reason":null,
+            "holders":[{"holder":"0xh","balance":"115792089237316195423570985008687907853269984665640564039457584007913129639935",
+                "share":0.1,"last_block":5,"is_pool":true,"is_burn":false,"is_deployer":false}],
+            "count":1,"has_more":false,"next_after":null,"concentration":null,"holder_growth":null,
+            "reconciliation":{"recon_ok":true,"recon_supply":"1","chain_supply":"1","recon_block":5,"checked_at":null},
+            "source":{}
+        })).unwrap();
+        assert!(holders.holders[0].is_pool);
+        assert_eq!(holders.holders[0].balance.len(), 78);
+        assert!(holders.reconciliation.is_some());
+
+        let batch: types::TokenBatchEntry = serde_json::from_str(
+            r#"{"address":"0xt","found":false,"status":"not_seen_yet","hint":"Not yet seen"}"#,
+        ).unwrap();
+        assert_eq!(batch.hint.as_deref(), Some("Not yet seen"));
+    }
 }

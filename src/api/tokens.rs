@@ -113,6 +113,9 @@ impl Tokens {
     /// **last**, not first. Use the wallet PnL endpoint for FIFO cost-basis PnL.
     ///
     /// 50 rows on PRO; ULTRA/BUSINESS raises the cap to 200.
+    ///
+    /// Returns raw JSON; for typed access deserialize it with
+    /// `serde_json::from_value::<crate::types::TopTradersResponse>(value)`.
     pub async fn top_traders(
         &self,
         address: &str,
@@ -134,6 +137,9 @@ impl Tokens {
     /// positive), and `unprofiled` is a real answer — that trader has not met the
     /// reputation thresholds. There is no `fresh_wallet` cohort: Robinhood Chain
     /// stores no wallet-level first-seen.
+    ///
+    /// Returns raw JSON; for typed access deserialize it with
+    /// `serde_json::from_value::<crate::types::FlowResponse>(value)`.
     pub async fn flow(&self, address: &str, params: &FlowParams) -> Result<serde_json::Value> {
         self.core
             .get(&format!("/rhc/tokens/{}/flow", address), params)
@@ -176,6 +182,9 @@ impl Tokens {
     /// an owner flips a setting. Note `owner.model = "none"` (no owner function at
     /// all) is a different answer from `"renounced"`, and `lp_custody` is read only
     /// for uniswap-v2 pools (v3/v4 LP sits in an NFT and reports `"unknown"`).
+    ///
+    /// Returns raw JSON; for typed access deserialize it with
+    /// `serde_json::from_value::<crate::types::TokenRiskResponse>(value)`.
     pub async fn risk(&self, address: &str) -> Result<serde_json::Value> {
         self.core
             .get(&format!("/rhc/tokens/{}/risk", address), &())
@@ -202,6 +211,9 @@ impl Tokens {
     /// `serde_json::from_value::<Option<HolderGrowth>>(resp["holder_growth"].clone())`.
     /// A window is `null` only when the chain had no ingested trades in it; the
     /// object is `null` only if the growth read failed.
+    ///
+    /// Returns raw JSON; for typed access deserialize it with
+    /// `serde_json::from_value::<crate::types::HoldersResponse>(value)`.
     pub async fn holders(
         &self,
         address: &str,

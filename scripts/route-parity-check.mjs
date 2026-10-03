@@ -4,7 +4,7 @@
  * Robinhood Chain API surface.
  *
  * This standalone crate is NOT scanned by the monorepo's sdk-route-parity guard,
- * so it ships its own. The 59 `/rhc/*` paths (5 of them aliases) — carrying 68 operations, because
+ * so it ships its own. The 60 `/rhc/*` paths (5 of them aliases) — carrying 69 operations, because
  * the ten rule-engine paths each serve several HTTP methods — are pinned below
  * (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
  *
@@ -23,7 +23,7 @@ import path from "node:path";
 
 const SRC = process.env.SRC_DIR || "src";
 
-// The 59 documented Robinhood Chain paths, normalized ({param} -> :p).
+// The 60 documented Robinhood Chain paths, normalized ({param} -> :p).
 const RHC_ROUTES = [
   "/rhc/alpha-wallets",
   "/rhc/alpha/leaderboard",
@@ -81,6 +81,7 @@ const RHC_ROUTES = [
   "/rhc/wallet-tracker/watchlist",
   "/rhc/wallet-tracker/watchlist/:p",
   "/rhc/wallet/:p",
+  "/rhc/wallet/:p/funding",
   "/rhc/wallet/:p/pnl",
   "/rhc/wallet/:p/positions",
   "/rhc/wallet/:p/trades",
