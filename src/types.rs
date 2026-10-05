@@ -2803,23 +2803,42 @@ pub struct RhcCopyTradeSubscription {
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
-    /// Source wallets that are tracked RHC KOL wallets — only these can fire.
-    /// `None` when the tracking read failed, or on servers before 2026-09-25.
+    /// Deprecated 2026-10-04 (kept, still filled): source wallets that are
+    /// tracked RHC KOL wallets (`kol_evm_wallets`). KOL enrichment only under
+    /// `source_admission` `"any_wallet"`; under the legacy `"kol_only"` engine only
+    /// these fire. `None` when the tracking read failed, or on servers before
+    /// 2026-09-25.
     #[serde(default)]
     pub source_wallets_tracked: Option<Vec<String>>,
-    /// Source wallets that are not tracked: they never produce a signal.
+    /// Deprecated 2026-10-04 (kept, still filled): source wallets that are not
+    /// tracked KOL wallets. They fire like any other wallet under `"any_wallet"`;
+    /// under the legacy `"kol_only"` engine they never produce a signal.
     #[serde(default)]
     pub source_wallets_untracked: Option<Vec<String>>,
-    /// Present only when something needs attention (e.g. `untracked_source_wallets`).
+    /// Present only when something needs attention (legacy `"kol_only"`:
+    /// `untracked_source_wallets`); omitted under `"any_wallet"`.
     #[serde(default)]
     pub warnings: Option<Vec<CopyTradeRuleWarning>>,
-    /// Server 2026-10-02 — whether the rule can fire at all, separate from
-    /// `is_active` (your switch): `"eligible"` (at least one tracked source
-    /// wallet), `"no_tracked_sources"` (kept, but can never fire) or
-    /// `"unknown"` (the tracking read failed; never assumed eligible). `None`
-    /// on older servers.
+    /// Server 2026-10-02 — whether the rule can fire right now, separate from
+    /// `is_active` (your switch). Under `"any_wallet"` (2026-10-04):
+    /// `"eligible"`, or an infrastructure state — `"monitoring_pending"` (rule
+    /// changed after the engine's last load, live within seconds),
+    /// `"monitoring_unavailable"` (engine / trade stream not reporting, see
+    /// `monitoring_reasons`), `"source_capacity_unavailable"`. Legacy
+    /// `"kol_only"`: `"no_tracked_sources"` | `"unknown"` (never assumed
+    /// eligible). `None` on older servers.
     #[serde(default)]
     pub operational_state: Option<String>,
+    /// Server 2026-10-04 — which trades the RUNNING engine admits: `"any_wallet"`
+    /// (any valid 0x wallet, KOL or not; the ERC-4337 userOp sender on bundled
+    /// transactions) or legacy `"kol_only"`. `None` = unknown (legacy semantics).
+    #[serde(default)]
+    pub source_admission: Option<String>,
+    /// Server 2026-10-04 — present only with `operational_state`
+    /// `"monitoring_unavailable"`: e.g. `dex_stream_stale`, `trade_stream_stale`,
+    /// `source_producer_stale`, `bus_disconnected`, `engine_state_stale`.
+    #[serde(default)]
+    pub monitoring_reasons: Option<Vec<String>>,
 }
 
 /// A non-fatal note on a copy-trade rule; the rule is saved unchanged.
