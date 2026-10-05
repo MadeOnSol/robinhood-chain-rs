@@ -8,6 +8,10 @@ use crate::types::*;
 ///
 /// A rule watches up to 250 `source_wallets` and fires on every qualifying RHC
 /// swap they make, delivering a signal by webhook, WebSocket, or both.
+/// Copy-trade rules can follow any valid 0x wallet, KOL or not (server
+/// 2026-10-04, `source_admission` `"any_wallet"`; KOL membership is enrichment
+/// only and copy-trade sources do not use Wallet Tracker quota);
+/// `operational_state` on every rule says whether it can fire right now.
 ///
 /// ⚠️ **Quotas are PER CHAIN.** A full set of Solana copy-trade rules does not
 /// consume any Robinhood Chain capacity, and vice versa.

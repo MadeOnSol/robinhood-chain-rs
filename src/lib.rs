@@ -607,4 +607,29 @@ mod tests {
         ).unwrap();
         assert_eq!(batch.hint.as_deref(), Some("Not yet seen"));
     }
+
+    #[test]
+    fn copytrade_any_wallet_operational_state_parses() {
+        let rule = r#"{"id":1,"name":null,"source_wallets":["0xaa","0xbb"],"min_trade_eth":0,
+            "only_action":"buy","sizing_mode":"fixed","sizing_amount":0.05,"delivery_mode":"websocket",
+            "webhook_url":null,"is_active":true,"created_at":"t","updated_at":"t",
+            "source_wallets_tracked":["0xaa"],"source_wallets_untracked":["0xbb"],
+            "operational_state":"eligible","source_admission":"any_wallet"}"#;
+        let r: types::RhcCopyTradeSubscription = serde_json::from_str(rule).unwrap();
+        assert_eq!(r.source_admission.as_deref(), Some("any_wallet"));
+        assert_eq!(r.operational_state.as_deref(), Some("eligible"));
+        assert!(r.monitoring_reasons.is_none() && r.warnings.is_none());
+
+        let down = rule.replace(r#""operational_state":"eligible""#,
+            r#""operational_state":"monitoring_unavailable","monitoring_reasons":["dex_stream_stale"]"#);
+        let d: types::RhcCopyTradeSubscription = serde_json::from_str(&down).unwrap();
+        assert_eq!(d.monitoring_reasons, Some(vec!["dex_stream_stale".to_string()]));
+
+        // An older server: none of the new keys.
+        let old = r#"{"id":2,"name":"x","source_wallets":["0xaa"],"min_trade_eth":0.01,"only_action":"both",
+            "sizing_mode":"proportional","sizing_amount":1,"delivery_mode":"webhook","webhook_url":"https://x",
+            "is_active":false,"created_at":"t","updated_at":"t"}"#;
+        let o: types::RhcCopyTradeSubscription = serde_json::from_str(old).unwrap();
+        assert!(o.source_admission.is_none() && o.operational_state.is_none());
+    }
 }
