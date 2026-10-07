@@ -866,6 +866,7 @@ pub struct TradesParams {
 /// A single Uniswap swap on Robinhood Chain.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RhcTrade {
+    pub pair_status: Option<String>,
     pub block_number: i64,
     pub block_time: String,
     pub tx_hash: String,
@@ -4807,6 +4808,7 @@ pub struct RhcHolder {
 /// Body of `GET /rhc/tokens/{address}/holders`. Check `verified` before relying on the numbers.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HoldersResponse {
+    pub history_coverage: Option<RhcHolderHistoryCoverage>,
     pub chain: String,
     pub token_address: String,
     /// True only when reconstructed supply matches on-chain totalSupply().
@@ -4927,6 +4929,7 @@ pub struct RhcFundingPagination {
 /// independent.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WalletFundingResponse {
+    pub wallet_coverage: Option<RhcWalletFundingCoverage>,
     pub chain: String,
     /// CAIP-2 id, e.g. `eip155:4663`.
     pub chain_id: String,
@@ -4951,4 +4954,25 @@ pub struct WalletFundingResponse {
     /// when the server may claim them.
     #[serde(default)]
     pub direct_funding: Option<serde_json::Value>,
+}
+
+/// Holder reconciliation alone does not establish history continuity.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcHolderHistoryCoverage {
+    pub state: String,
+    pub history: String,
+    pub reason: Option<String>,
+    pub fold_from_block: Option<u64>,
+    pub compared_at_block: Option<u64>,
+    pub verified_at_block: Option<u64>,
+}
+
+/// Per-address visibility; not_tracked is not evidence of no funding.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcWalletFundingCoverage {
+    pub state: String,
+    pub currently_tracked: bool,
+    pub ever_tracked: bool,
+    pub address_kind: Option<String>,
+    pub limitations: Vec<String>,
 }
