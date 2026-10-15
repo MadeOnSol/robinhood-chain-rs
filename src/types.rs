@@ -1423,6 +1423,14 @@ pub struct TokenDetailResponse {
     /// Constant statement of the uniswap-v4 ceiling semantics.
     #[serde(default)]
     pub liquidity_note: Option<String>,
+    /// Where `liquidity_usd` comes from: `pool_balances` | `v4_virtual_ceiling` |
+    /// `bonding_curve_reserve` | `unknown_venue`.
+    #[serde(default)]
+    pub liquidity_source: Option<String>,
+    /// `available` | `verified_zero` | `unavailable`. `unavailable` means
+    /// `liquidity_usd` is null (unknown); null never means zero.
+    #[serde(default)]
+    pub liquidity_status: Option<String>,
     /// Blocks whose lookup failed (e.g. `deployer_other_tokens`) — their values
     /// are unknown, not empty. Empty when every lookup succeeded.
     #[serde(default)]
@@ -1470,6 +1478,10 @@ pub struct HoldersParams {
     /// Page offset (0..=10000).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+    /// Opt in to per-holder `wallet_flags` + top-level `wallet_flags_meta`
+    /// (current holder page only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_wallet_flags: Option<bool>,
 }
 
 /// One holder-growth window (`1h` / `24h` / `7d`) inside
@@ -1695,7 +1707,38 @@ pub struct BuyerQualityResponse {
     pub quality: BuyerQuality,
     #[serde(default)]
     pub coverage: Option<BuyerQualityCoverage>,
+    /// Only with `include_balances=true` (PRO+): the early buyers counted in
+    /// `dump_cluster_count` and what they hold NOW. Totals only when every
+    /// member was read.
+    #[serde(default)]
+    pub dump_cluster_held_now: Option<DumpClusterHeldNow>,
     /// Present only when buyer data is insufficient.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Query parameters for
+/// [`Tokens::buyer_quality_with`](crate::api::tokens::Tokens::buyer_quality_with).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BuyerQualityParams {
+    /// PRO+: add `dump_cluster_held_now` (current balances of the dump-cluster
+    /// early buyers). The base response is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_balances: Option<bool>,
+}
+
+/// `dump_cluster_held_now` on a buyer-quality response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DumpClusterHeldNow {
+    #[serde(default)]
+    pub cohort_size: Option<i64>,
+    /// Dump-cluster members among the early buyers (= `dump_cluster_count`).
+    #[serde(default)]
+    pub members: Option<i64>,
+    #[serde(default)]
+    pub held_now: Option<RhcHeldNow>,
+    #[serde(default)]
+    pub wallets: Vec<RhcWalletBalanceNow>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -1721,6 +1764,10 @@ pub struct RhcBundle {
     pub buy_volume: f64,
     /// Cohort net position (Σbuys − Σsells, human-scaled).
     pub tokens_held: f64,
+    /// `swap_only` | `swap_and_transfers`. `swap_only` = token transfers are not
+    /// applied; use `held_now` (opt-in) for balance-based figures.
+    #[serde(default)]
+    pub holdings_basis: Option<String>,
 }
 
 /// A single wallet in the bundle cohort. Empty for BASIC; top-10 for PRO;
@@ -1746,6 +1793,10 @@ pub struct RhcBundleWallet {
     /// ULTRA only — net position, human-scaled.
     #[serde(default)]
     pub tokens_held: Option<f64>,
+    /// Only with `include_balances=true` (PRO+): this wallet's current
+    /// `balanceOf(token)` from our node. `unverified` never means zero.
+    #[serde(default)]
+    pub balance_now: Option<RhcBalanceNow>,
 }
 
 /// Response of [`Tokens::bundle`](crate::api::tokens::Tokens::bundle).
@@ -1754,9 +1805,22 @@ pub struct RhcBundleResponse {
     pub chain: String,
     pub token_address: String,
     pub bundle: RhcBundle,
+    /// Only with `include_balances=true` (PRO+): the cohort's CURRENT balances,
+    /// next to the swap-derived `bundle.*` figures. Totals only when every
+    /// cohort wallet was read.
+    #[serde(default)]
+    pub held_now: Option<RhcHeldNow>,
     /// Empty for BASIC; top-10 for PRO; full cohort for ULTRA.
     #[serde(default)]
     pub wallets: Vec<RhcBundleWallet>,
+}
+
+/// Query parameters for [`Tokens::bundle_with`](crate::api::tokens::Tokens::bundle_with).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BundleParams {
+    /// PRO+: add `held_now` and per-wallet `balance_now` (current `balanceOf`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_balances: Option<bool>,
 }
 
 // ─── Tokens: batch ───────────────────────────────────────────────────────────
@@ -1832,6 +1896,13 @@ pub struct TokenBatchEntry {
     pub fdv_usd: Option<f64>,
     #[serde(default)]
     pub liquidity_usd: Option<f64>,
+    /// Where `liquidity_usd` comes from: `pool_balances` | `v4_virtual_ceiling` |
+    /// `bonding_curve_reserve` | `unknown_venue`.
+    #[serde(default)]
+    pub liquidity_source: Option<String>,
+    /// `available` | `verified_zero` | `unavailable` (null liquidity, never zero).
+    #[serde(default)]
+    pub liquidity_status: Option<String>,
     #[serde(default)]
     pub peak_mc_usd: Option<f64>,
     #[serde(default)]
@@ -2115,6 +2186,35 @@ pub struct DeployerTokensParams {
     pub offset: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<DeployerTokensSort>,
+    /// Opt in to `launches_24h` (indexed launches in a rolling UTC 24 h window).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_launches_24h: Option<bool>,
+}
+
+/// `launches_24h` on a deployer token-history response. Indexed observations
+/// only, not a chain-complete count; `count` is `None` (never 0) unless
+/// `status == "observed"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcLaunches24h {
+    #[serde(default)]
+    pub window_start: Option<String>,
+    #[serde(default)]
+    pub window_end: Option<String>,
+    #[serde(default)]
+    pub count: Option<i64>,
+    /// `observed` | `source_unavailable` | `over_budget` | `source_incomplete` |
+    /// `untracked_deployer`.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// `indexed_observations_only`.
+    #[serde(default)]
+    pub completeness: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<String>,
+    #[serde(default)]
+    pub row_cap_per_source: Option<i64>,
+    #[serde(default)]
+    pub source_rows: Option<serde_json::Value>,
 }
 
 /// One token in a deployer's paginated launch history.
@@ -2168,6 +2268,9 @@ pub struct DeployerTokensResponse {
     /// only, not the whole history.
     #[serde(default)]
     pub sort_scope: Option<String>,
+    /// Only with `include_launches_24h=true`.
+    #[serde(default)]
+    pub launches_24h: Option<RhcLaunches24h>,
 }
 
 // ─── Deployer-hunter: best tokens ────────────────────────────────────────────
@@ -4553,6 +4656,13 @@ pub struct EarlyBuyersParams {
     /// 1..=20, default 20.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// ULTRA+: verify every buyer's balance at one pinned block on our node
+    /// (all verified or 503, never a partial panel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_current_balances: Option<bool>,
+    /// PRO+: add `is_kol` and `scout_score` (as of each buyer's own first buy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_scout_scores: Option<bool>,
 }
 
 /// One ranked early buyer.
@@ -4570,6 +4680,13 @@ pub struct EarlyBuyer {
     /// Raw token balance (decimal string) from the Transfer-log fold.
     #[serde(default)]
     pub balance: Option<String>,
+    /// `verified_nonzero` | `verified_zero` | `unverified`.
+    #[serde(default)]
+    pub holding_status: Option<String>,
+    /// Why `holding_status` is what it is (e.g. `indexed_nonzero_balance`,
+    /// `pinned_chain_zero_balance`, `holder_read_failed`).
+    #[serde(default)]
+    pub holding_reason: Option<String>,
     /// `open` | `closed` | `unknown`.
     pub position: String,
     #[serde(default)]
@@ -4583,6 +4700,54 @@ pub struct EarlyBuyer {
     pub trades: Option<u64>,
     #[serde(default)]
     pub avg_entry_mc_usd: Option<f64>,
+    /// Only with `include_scout_scores=true`: `false` = not a known KOL
+    /// address; `None` = unknown (scout read failed).
+    #[serde(default)]
+    pub is_kol: Option<bool>,
+    /// Only with `include_scout_scores=true`: this KOL's scout score as of its
+    /// own `first_buy_at` (no hindsight). `None` for non-KOLs or when unknown.
+    #[serde(default)]
+    pub scout_score: Option<RhcScoutScore>,
+}
+
+/// A KOL's scout score at one moment (`as_of`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcScoutScore {
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// First touches in `[as_of − 30 d, as_of − 4 h]`.
+    #[serde(default)]
+    pub first_touches_30d: Option<i64>,
+    #[serde(default)]
+    pub avg_followers_4h: Option<f64>,
+    /// % of first touches that drew ≥ 3 other KOLs within 4 h.
+    #[serde(default)]
+    pub swarm_3plus_pct: Option<f64>,
+    /// % of first touches that drew ≥ 5 other KOLs within 4 h.
+    #[serde(default)]
+    pub swarm_5plus_pct: Option<f64>,
+    /// `S` | `A` | `B` | `C`; `None` below 30 first touches.
+    #[serde(default)]
+    pub scout_tier: Option<String>,
+}
+
+/// `onchain_balance_verification` on an early-buyers response: present only
+/// after ALL `verify_current_balances` checks passed at one pinned block.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcOnchainBalanceVerification {
+    /// `rhc_node_pinned_balanceOf`.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub block_number: Option<u64>,
+    #[serde(default)]
+    pub block_hash: Option<String>,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+    #[serde(default)]
+    pub verified_wallets: Option<u32>,
+    #[serde(default)]
+    pub complete: Option<bool>,
 }
 
 /// Aggregate over the ranked cohort.
@@ -4612,6 +4777,21 @@ pub struct EarlyBuyersResponse {
     /// `still_holding` is exact only when this is `Some(true)`.
     #[serde(default)]
     pub holdings_verified: Option<bool>,
+    /// Block of the latest supply reconciliation (no atomic snapshot guarantee
+    /// for holder rows).
+    #[serde(default)]
+    pub holder_recon_block: Option<u64>,
+    #[serde(default)]
+    pub holder_recon_checked_at: Option<String>,
+    /// Only with `verify_current_balances=true`, after every check passed.
+    #[serde(default)]
+    pub onchain_balance_verification: Option<RhcOnchainBalanceVerification>,
+    /// Only with `include_scout_scores=true`: `ok` | `unavailable` | `timeout` | `error`.
+    #[serde(default)]
+    pub scout_scores_status: Option<String>,
+    /// Only with `include_scout_scores=true`: the scout score method.
+    #[serde(default)]
+    pub scout_scores_note: Option<String>,
     #[serde(default)]
     pub summary: Option<EarlyBuyersSummary>,
     #[serde(default)]
@@ -4665,6 +4845,42 @@ pub struct RhcTopTrader {
     /// 1–20 when this trader was an early buyer.
     #[serde(default)]
     pub early_buyer_rank: Option<i64>,
+    /// FIFO realized PnL on this token (same method as `/rhc/wallet/{address}/pnl`).
+    /// `None` when the response's `fifo_status` is not `ok`.
+    #[serde(default)]
+    pub fifo: Option<RhcTopTraderFifo>,
+}
+
+/// Per-trader `fifo` block on `GET /rhc/tokens/{address}/top-traders`.
+/// Open lots are not valued: `fifo_open_tokens` is NOT a verified balance.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcTopTraderFifo {
+    pub realized_pnl_eth: f64,
+    /// realized / matched cost basis; `None` when nothing was matched.
+    #[serde(default)]
+    pub roi: Option<f64>,
+    #[serde(default)]
+    pub cost_basis_matched_eth: Option<f64>,
+    #[serde(default)]
+    pub bought_eth: Option<f64>,
+    #[serde(default)]
+    pub sold_eth: Option<f64>,
+    /// Tokens sold without an earlier observed buy; excluded from realized PnL.
+    #[serde(default)]
+    pub unmatched_sell_tokens: Option<f64>,
+    /// True when `unmatched_sell_tokens` is 0.
+    #[serde(default)]
+    pub cost_basis_complete: Option<bool>,
+    #[serde(default)]
+    pub fifo_open_tokens: Option<f64>,
+    #[serde(default)]
+    pub open_cost_basis_eth: Option<f64>,
+    #[serde(default)]
+    pub sized_trades: Option<i64>,
+    #[serde(default)]
+    pub unpriced_trades: Option<i64>,
+    #[serde(default)]
+    pub unsized_trades: Option<i64>,
 }
 
 /// Body of `GET /rhc/tokens/{address}/top-traders`.
@@ -4680,6 +4896,14 @@ pub struct TopTradersResponse {
     /// States the net_eth semantics explicitly.
     #[serde(default)]
     pub metric: Option<String>,
+    /// Method of the per-trader `fifo` block (`fifo`).
+    #[serde(default)]
+    pub cost_method: Option<String>,
+    /// `ok` | `unavailable` | `timeout` | `error`. The ranking never depends on it.
+    #[serde(default)]
+    pub fifo_status: Option<String>,
+    #[serde(default)]
+    pub fifo_note: Option<String>,
     /// Interim attribution disclosure (pre-2026-07-18 history not reflected).
     #[serde(default)]
     pub attribution: Option<RhcAttributionNote>,
@@ -4792,9 +5016,17 @@ pub struct RhcHolder {
     pub holder: String,
     /// Raw uint256 as a decimal STRING — never parse into a float.
     pub balance: String,
-    /// Share of circulating (pools/burns excluded), [0,1].
+    /// balance / non-burned supply (liquidity pools INCLUDED), [0,1]; `None` on
+    /// burn rows. Not the concentration basis: use `share_of_circulating`.
     #[serde(default)]
     pub share: Option<f64>,
+    /// balance / total folded supply (pools and burns included), [0,1].
+    #[serde(default)]
+    pub share_of_supply: Option<f64>,
+    /// balance / circulating supply (pools and burns excluded), [0,1]: the
+    /// concentration basis. `None` on pool and burn rows, or when unknown.
+    #[serde(default)]
+    pub share_of_circulating: Option<f64>,
     #[serde(default)]
     pub last_block: Option<i64>,
     #[serde(default)]
@@ -4803,6 +5035,46 @@ pub struct RhcHolder {
     pub is_burn: bool,
     #[serde(default)]
     pub is_deployer: bool,
+    /// Only with `include_wallet_flags=true`; `None` for pools/burns, invalid
+    /// addresses or unavailable sources.
+    #[serde(default)]
+    pub wallet_flags: Option<RhcWalletFlags>,
+}
+
+/// Per-holder `wallet_flags`. A `false`/`None` whose `label_coverage` entry says
+/// `evaluated: false` means insufficient evidence, NOT a verified negative.
+/// RHC has no sniper or wallet-level bundler classifier: those are always `None`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcWalletFlags {
+    #[serde(default)]
+    pub is_sniper: Option<bool>,
+    #[serde(default)]
+    pub is_bundler: Option<bool>,
+    #[serde(default)]
+    pub is_kol: Option<bool>,
+    #[serde(default)]
+    pub is_alpha_tracked: Option<bool>,
+    #[serde(default)]
+    pub likely_bot: Option<bool>,
+    #[serde(default)]
+    pub is_dumper: Option<bool>,
+    #[serde(default)]
+    pub dump_cluster_as_of: Option<String>,
+    /// Per label: `{evaluated, reason}`.
+    #[serde(default)]
+    pub label_coverage: Option<serde_json::Value>,
+}
+
+/// Top-level `wallet_flags_meta` on a holders response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcWalletFlagsMeta {
+    /// `available` | `partial` | `unavailable`.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub rule_version: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// Body of `GET /rhc/tokens/{address}/holders`. Check `verified` before relying on the numbers.
@@ -4815,7 +5087,13 @@ pub struct HoldersResponse {
     pub verified: bool,
     #[serde(default)]
     pub unverified_reason: Option<String>,
+    /// Plain-language denominator of each per-holder ratio and the burn addresses.
+    #[serde(default)]
+    pub share_basis: Option<serde_json::Value>,
     pub holders: Vec<RhcHolder>,
+    /// Only with `include_wallet_flags=true`.
+    #[serde(default)]
+    pub wallet_flags_meta: Option<RhcWalletFlagsMeta>,
     pub count: i64,
     pub has_more: bool,
     /// Keyset cursor for the next page (`after=`); `None` on the last page.
@@ -4975,4 +5253,676 @@ pub struct RhcWalletFundingCoverage {
     pub ever_tracked: bool,
     pub address_kind: Option<String>,
     pub limitations: Vec<String>,
+}
+
+// ─── Current balances (shared by the include_balances opt-ins) ──────────────
+
+/// One wallet's current `balanceOf(token)`, read from our own Robinhood Chain
+/// node. `status == "unverified"` (with a `reason`) never means zero, and the
+/// balance is never reconstructed from trades.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcBalanceNow {
+    /// `verified` | `unverified`.
+    pub status: String,
+    /// uint256 as a decimal string.
+    #[serde(default)]
+    pub balance_raw: Option<String>,
+    #[serde(default)]
+    pub decimals: Option<u32>,
+    /// `balance_raw / 10^decimals`, exact decimal string.
+    #[serde(default)]
+    pub balance: Option<String>,
+    #[serde(default)]
+    pub holding: Option<bool>,
+    /// `rpc_unavailable` | `call_failed` | `decimals_failed` | `over_cap` | `not_read`.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `{wallet, balance_now}` row of a balance-read cohort.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcWalletBalanceNow {
+    pub wallet: String,
+    #[serde(default)]
+    pub balance_now: Option<RhcBalanceNow>,
+}
+
+/// `held_now`: a cohort's CURRENT holdings from `balanceOf` (one Multicall3
+/// batch on our node). Totals are `None` unless `complete` (every wallet read);
+/// never a partial sum.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcHeldNow {
+    /// `rhc_node_balanceOf_latest`.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+    #[serde(default)]
+    pub wallets: Option<i64>,
+    #[serde(default)]
+    pub verified_wallets: Option<i64>,
+    #[serde(default)]
+    pub holding_wallets: Option<i64>,
+    /// True only when every cohort wallet was read.
+    #[serde(default)]
+    pub complete: Option<bool>,
+    #[serde(default)]
+    pub incomplete_reason: Option<String>,
+    /// Exact uint256 sum (decimal string); `None` unless complete.
+    #[serde(default)]
+    pub tokens_held_raw: Option<String>,
+    /// `tokens_held_raw / 10^decimals`, exact decimal string; `None` unless complete.
+    #[serde(default)]
+    pub tokens_held: Option<String>,
+    /// RATIO in [0, 1] of `total_supply_raw`; `None` unless complete and supply known.
+    #[serde(default)]
+    pub held_pct_of_supply: Option<f64>,
+    /// `total_supply_raw` or `None`.
+    #[serde(default)]
+    pub supply_basis: Option<String>,
+}
+
+// ─── Tokens: bundle-share / bundle clusters ──────────────────────────────────
+
+/// Window for the bundle-cluster endpoints.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BundleWindow {
+    #[serde(rename = "1h")]
+    H1,
+    #[serde(rename = "6h")]
+    H6,
+    #[serde(rename = "24h")]
+    H24,
+}
+
+/// Query parameters for [`Tokens::bundle_share`](crate::api::tokens::Tokens::bundle_share).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BundleShareParams {
+    /// Which later clusters to include (the launch bundle is always included). Default `24h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<BundleWindow>,
+    /// 3..=20, default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_wallets: Option<u32>,
+}
+
+/// Wallet accounting on a bundle-share response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleShareWallets {
+    #[serde(default)]
+    pub total: Option<i64>,
+    #[serde(default)]
+    pub launch_cohort_wallets: Option<i64>,
+    #[serde(default)]
+    pub cluster_wallets: Option<i64>,
+    #[serde(default)]
+    pub overlap: Option<i64>,
+    #[serde(default)]
+    pub clusters_counted: Option<i64>,
+    #[serde(default)]
+    pub verified: Option<i64>,
+    #[serde(default)]
+    pub holding: Option<i64>,
+    #[serde(default)]
+    pub max: Option<i64>,
+}
+
+/// Response of [`Tokens::bundle_share`](crate::api::tokens::Tokens::bundle_share).
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleShareResponse {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub window: Option<String>,
+    #[serde(default)]
+    pub min_wallets: Option<u32>,
+    /// RATIO in [0, 1]: share of supply held now by every bundle wallet. `None`
+    /// unless every wallet was read (see `held_now.incomplete_reason`).
+    #[serde(default)]
+    pub bundled_pct_of_supply_now: Option<f64>,
+    /// `launch_and_clusters` | `launch_cohort_only`.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// `ok` | `unavailable` | `timeout` | `error`.
+    #[serde(default)]
+    pub clusters_status: Option<String>,
+    #[serde(default)]
+    pub wallets: Option<BundleShareWallets>,
+    #[serde(default)]
+    pub held_now: Option<RhcHeldNow>,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Query parameters for [`Tokens::bundles`](crate::api::tokens::Tokens::bundles).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BundleClustersParams {
+    /// Default `24h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<BundleWindow>,
+    /// Minimum distinct buyers in one block to count as a cluster (3..=20, default 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_wallets: Option<u32>,
+    /// 1..=100, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Add `held_now` (current balances) to the 3 most recent clusters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_balances: Option<bool>,
+}
+
+/// Summary block of a bundle-clusters response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleClustersSummary {
+    #[serde(default)]
+    pub cluster_count: Option<i64>,
+    #[serde(default)]
+    pub launch_clusters: Option<i64>,
+    #[serde(default)]
+    pub later_clusters: Option<i64>,
+    #[serde(default)]
+    pub latest_cluster_at: Option<String>,
+    #[serde(default)]
+    pub largest_cluster_wallets: Option<i64>,
+    /// Window baseline; `None` when no cluster was found.
+    #[serde(default)]
+    pub baseline: Option<serde_json::Value>,
+}
+
+/// What a cluster's wallets have SOLD since the cluster (bundle-watch sell ledger).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcBundleClusterExit {
+    #[serde(default)]
+    pub cluster_id: Option<i64>,
+    #[serde(default)]
+    pub followed_until: Option<String>,
+    #[serde(default)]
+    pub wallets_tracked: Option<i64>,
+    #[serde(default)]
+    pub wallets_sold: Option<i64>,
+    /// Sold ≥ 99 % of their cluster buy.
+    #[serde(default)]
+    pub wallets_exited: Option<i64>,
+    /// uint256 decimal string.
+    #[serde(default)]
+    pub bought_tokens_raw: Option<String>,
+    /// uint256 decimal string.
+    #[serde(default)]
+    pub sold_tokens_raw: Option<String>,
+    /// 0..1.
+    #[serde(default)]
+    pub sold_pct: Option<f64>,
+    #[serde(default)]
+    pub realized_eth: Option<f64>,
+    #[serde(default)]
+    pub last_sell_at: Option<String>,
+}
+
+/// One coordinated buy cluster (a block with ≥ `min_wallets` distinct buyers).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcBundleCluster {
+    pub block_number: u64,
+    /// Transactions carrying 3+ of the cluster's buyers.
+    #[serde(default)]
+    pub same_tx_groups: Option<i64>,
+    #[serde(default)]
+    pub eth_volume: Option<f64>,
+    /// uint256 decimal string.
+    #[serde(default)]
+    pub token_volume_raw: Option<String>,
+    pub at: String,
+    #[serde(default)]
+    pub minutes_after_launch: Option<f64>,
+    /// `launch` (within 5 minutes of `launch_at`) | `later` | `unknown`.
+    #[serde(default)]
+    pub phase: Option<String>,
+    pub wallet_count: i64,
+    /// Buyers with no earlier buy of this token.
+    #[serde(default)]
+    pub new_wallets: Option<i64>,
+    /// At most 50.
+    #[serde(default)]
+    pub wallets: Vec<String>,
+    /// Only with `include_balances=true`, on the 3 most recent clusters.
+    #[serde(default)]
+    pub held_now: Option<RhcHeldNow>,
+    /// `None` = not followed by bundle-watch.
+    #[serde(default)]
+    pub exit: Option<RhcBundleClusterExit>,
+}
+
+/// Response of [`Tokens::bundles`](crate::api::tokens::Tokens::bundles). An
+/// empty `clusters` means no block in the window had `min_wallets` distinct buyers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleClustersResponse {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub window: Option<String>,
+    #[serde(default)]
+    pub min_wallets: Option<u32>,
+    #[serde(default)]
+    pub launch_at: Option<String>,
+    #[serde(default)]
+    pub summary: Option<BundleClustersSummary>,
+    #[serde(default)]
+    pub clusters: Vec<RhcBundleCluster>,
+    /// Only with `include_balances=true`.
+    #[serde(default)]
+    pub held_now_clusters: Option<i64>,
+    /// `ok` | `unavailable` | `error` (clusters are served either way).
+    #[serde(default)]
+    pub exit_tracking: Option<String>,
+    #[serde(default)]
+    pub exit_note: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+// ─── Tokens: per-token KOL trades ────────────────────────────────────────────
+
+/// Query parameters for [`Tokens::kol_trades`](crate::api::tokens::Tokens::kol_trades).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenKolTradesParams {
+    /// 1..=200, default 100 (BASIC is clamped to 20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<TradeAction>,
+    /// Only trades strictly after this ISO-8601 time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// `next_cursor` from the previous page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Only this KOL address (0x, 40 hex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kol: Option<String>,
+    /// PRO+: current `balanceOf(token)` per KOL address on the page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_balances: Option<bool>,
+}
+
+/// One KOL trade on a token.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenKolTrade {
+    pub id: String,
+    #[serde(default)]
+    pub kol_name: Option<String>,
+    #[serde(default)]
+    pub kol_twitter: Option<String>,
+    pub evm_address: String,
+    pub action: TradeAction,
+    #[serde(default)]
+    pub eth_amount: Option<f64>,
+    #[serde(default)]
+    pub token_amount: Option<f64>,
+    #[serde(default)]
+    pub price_usd_at_trade: Option<f64>,
+    #[serde(default)]
+    pub market_cap_usd_at_trade: Option<f64>,
+    #[serde(default)]
+    pub dex: Option<String>,
+    pub tx_hash: String,
+    #[serde(default)]
+    pub log_index: Option<i64>,
+    #[serde(default)]
+    pub block_number: Option<u64>,
+    pub traded_at: String,
+}
+
+/// Counts over the `by_wallet` balance reads.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolTradesBalanceSummary {
+    #[serde(default)]
+    pub wallets: Option<i64>,
+    #[serde(default)]
+    pub verified: Option<i64>,
+    #[serde(default)]
+    pub holding: Option<i64>,
+    #[serde(default)]
+    pub zero: Option<i64>,
+    #[serde(default)]
+    pub unverified: Option<i64>,
+}
+
+/// `balances` on a per-token KOL-trades response (`include_balances=true`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolTradesBalances {
+    /// `rhc_node_balanceOf_latest`.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+    /// KOL address → its current balance read.
+    #[serde(default)]
+    pub by_wallet: HashMap<String, RhcBalanceNow>,
+    #[serde(default)]
+    pub summary: Option<KolTradesBalanceSummary>,
+}
+
+/// Response of [`Tokens::kol_trades`](crate::api::tokens::Tokens::kol_trades).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenKolTradesResponse {
+    pub chain: String,
+    pub token_address: String,
+    #[serde(default)]
+    pub trades: Vec<TokenKolTrade>,
+    pub count: u32,
+    /// Distinct KOL addresses on this page.
+    #[serde(default)]
+    pub kols_on_page: Option<u32>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    /// Exact (limit + 1 probe).
+    pub has_more: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Only with `include_balances=true`.
+    #[serde(default)]
+    pub balances: Option<KolTradesBalances>,
+}
+
+// ─── Deployer-hunter: developer activity timeline ────────────────────────────
+
+/// Query parameters for
+/// [`DeployerHunter::activity`](crate::api::deployer_hunter::DeployerHunter::activity).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeployerActivityParams {
+    /// 1..=200, default 100.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Window start (ISO-8601); default 30 days ago, clamped to 90 days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// Comma list of `launch`, `dev_buy`, `dev_sell` (default all).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<String>,
+    /// `next_cursor` from the previous page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// One event of a developer's timeline.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerActivityEvent {
+    /// Stable timeline key: `t:<trade row id>` or `l:<token>`.
+    pub id: String,
+    /// `launch` | `dev_buy` | `dev_sell`.
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Chain time (launch: first seen).
+    pub at: String,
+    #[serde(default)]
+    pub block_number: Option<u64>,
+    pub token_address: String,
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    /// `creator` | `pool_creator` (weaker: only the first pool's creator is known).
+    #[serde(default)]
+    pub attribution: Option<String>,
+    /// Launch only.
+    #[serde(default)]
+    pub token_name: Option<String>,
+    /// Launch only.
+    #[serde(default)]
+    pub launchpad: Option<String>,
+    /// Dev trades only: equals the `rhc:dev_activity` WS event id.
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+    #[serde(default)]
+    pub log_index: Option<i64>,
+    #[serde(default)]
+    pub dex: Option<String>,
+    #[serde(default)]
+    pub eth_amount: Option<f64>,
+    /// Raw uint256 of the token leg (decimal string).
+    #[serde(default)]
+    pub token_amount_raw: Option<String>,
+    #[serde(default)]
+    pub price_usd: Option<f64>,
+}
+
+/// Event counts on a developer-activity response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerActivitySummary {
+    #[serde(default)]
+    pub launches: Option<i64>,
+    #[serde(default)]
+    pub dev_buys: Option<i64>,
+    #[serde(default)]
+    pub dev_sells: Option<i64>,
+}
+
+/// Window block on a developer-activity response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerActivityWindow {
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub max_days: Option<i64>,
+}
+
+/// Coverage block on a developer-activity response. An empty timeline is not
+/// proof that nothing happened outside these bounds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerActivityCoverage {
+    #[serde(default)]
+    pub tokens_attributed: Option<i64>,
+    #[serde(default)]
+    pub tokens_truncated: Option<bool>,
+    /// `None` when the archive floor is unknown.
+    #[serde(default)]
+    pub dev_trades_complete_from: Option<String>,
+    #[serde(default)]
+    pub archive_required_before: Option<String>,
+    #[serde(default)]
+    pub trades_scanned: Option<i64>,
+    /// The trade scan stopped early; continue with `next_cursor`.
+    #[serde(default)]
+    pub scan_truncated: Option<bool>,
+    /// Always `false` in v1.
+    #[serde(default)]
+    pub transfers_included: Option<bool>,
+    /// Always `false` in v1.
+    #[serde(default)]
+    pub linked_wallets_included: Option<bool>,
+}
+
+/// Response of
+/// [`DeployerHunter::activity`](crate::api::deployer_hunter::DeployerHunter::activity).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerActivityResponse {
+    pub chain: String,
+    pub address: String,
+    #[serde(default)]
+    pub events: Vec<DeployerActivityEvent>,
+    pub count: u32,
+    #[serde(default)]
+    pub summary: Option<DeployerActivitySummary>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    #[serde(default)]
+    pub window: Option<DeployerActivityWindow>,
+    #[serde(default)]
+    pub coverage: Option<DeployerActivityCoverage>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+// ─── KOL: scout leaderboard ──────────────────────────────────────────────────
+
+/// Scout tier (on `swarm_3plus_pct`: S ≥ 40, A ≥ 25, B ≥ 15, C below).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ScoutTier {
+    S,
+    A,
+    B,
+    C,
+}
+
+/// Sort key for the scout leaderboard (`scout_score` is an alias for `swarm_3plus_pct`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoutSort {
+    ScoutScore,
+    #[serde(rename = "n_first_touches_30d")]
+    NFirstTouches30d,
+    #[serde(rename = "swarm_3plus_pct")]
+    Swarm3plusPct,
+    #[serde(rename = "swarm_5plus_pct")]
+    Swarm5plusPct,
+    #[serde(rename = "avg_followers_4h")]
+    AvgFollowers4h,
+}
+
+/// Query parameters for
+/// [`Kol::scouts_leaderboard`](crate::api::kol::Kol::scouts_leaderboard).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ScoutLeaderboardParams {
+    /// 1..=100, default 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scout_tier: Option<ScoutTier>,
+    /// Default `swarm_3plus_pct`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<ScoutSort>,
+    /// Leave out KOLs with fewer first touches (default 30; below 30 the tier stays null).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_first_touches: Option<u32>,
+}
+
+/// One scout (a KOL; several EVM addresses are one scout).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RhcScout {
+    pub kol_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub twitter_url: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub evm_addresses: Vec<String>,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    pub first_touches_30d: i64,
+    #[serde(default)]
+    pub avg_followers_4h: Option<f64>,
+    #[serde(default)]
+    pub swarm_3plus_pct: Option<f64>,
+    #[serde(default)]
+    pub swarm_5plus_pct: Option<f64>,
+    /// `S` | `A` | `B` | `C`; `None` below 30 first touches.
+    #[serde(default)]
+    pub scout_tier: Option<String>,
+}
+
+/// Response of [`Kol::scouts_leaderboard`](crate::api::kol::Kol::scouts_leaderboard).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScoutLeaderboardResponse {
+    pub chain: String,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub scouts: Vec<RhcScout>,
+    pub count: u32,
+    #[serde(default)]
+    pub min_first_touches: Option<u32>,
+    /// `{tier_min_first_touches, note}`.
+    #[serde(default)]
+    pub method: Option<serde_json::Value>,
+}
+
+// ─── KOL: win-rate leaderboard (sort=winrate_7d|winrate_30d, PRO+) ───────────
+
+/// Win-rate sort for [`Kol::winrate_leaderboard`](crate::api::kol::Kol::winrate_leaderboard).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KolWinrateSort {
+    #[default]
+    #[serde(rename = "winrate_7d")]
+    Winrate7d,
+    #[serde(rename = "winrate_30d")]
+    Winrate30d,
+}
+
+/// Query parameters for [`Kol::winrate_leaderboard`](crate::api::kol::Kol::winrate_leaderboard).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct KolWinrateLeaderboardParams {
+    /// Always sent (default `winrate_7d`).
+    pub sort: KolWinrateSort,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Minimum fully closed positions in the window to be ranked (1..=100, default 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_closed: Option<u32>,
+}
+
+/// One row of the KOL win-rate leaderboard (FIFO, precomputed scores).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolWinrateLeaderboardEntry {
+    pub evm_address: String,
+    #[serde(default)]
+    pub kol_name: Option<String>,
+    #[serde(default)]
+    pub kol_twitter: Option<String>,
+    /// `available` | `partial` (wallet over the 50,000-trade analysis cap).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Percent (0-100).
+    #[serde(default)]
+    pub winrate_7d: Option<f64>,
+    #[serde(default)]
+    pub winrate_30d: Option<f64>,
+    #[serde(default)]
+    pub closed_positions_7d: Option<i64>,
+    #[serde(default)]
+    pub closed_positions_30d: Option<i64>,
+    #[serde(default)]
+    pub pnl_7d_eth: Option<f64>,
+    #[serde(default)]
+    pub pnl_30d_eth: Option<f64>,
+    #[serde(default)]
+    pub median_hold_minutes_30d: Option<f64>,
+    /// `scalper` | `day_trader` | `swing_trader` | `hodler`.
+    #[serde(default)]
+    pub auto_strategy_tag: Option<String>,
+    /// Same fingerprint as `/rhc/wallet/{address}/pnl` for the same snapshot.
+    #[serde(default)]
+    pub data_fingerprint: Option<String>,
+    #[serde(default)]
+    pub computed_at: Option<String>,
+}
+
+/// `scores_meta` on the win-rate leaderboard.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolScoresMeta {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub fresh_within_minutes: Option<i64>,
+    #[serde(default)]
+    pub definition: Option<String>,
+}
+
+/// Response of [`Kol::winrate_leaderboard`](crate::api::kol::Kol::winrate_leaderboard).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KolWinrateLeaderboardResponse {
+    pub chain: String,
+    /// `winrate_7d` | `winrate_30d`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub min_closed: Option<u32>,
+    #[serde(default)]
+    pub leaderboard: Vec<KolWinrateLeaderboardEntry>,
+    pub count: u32,
+    #[serde(default)]
+    pub scores_meta: Option<KolScoresMeta>,
 }
