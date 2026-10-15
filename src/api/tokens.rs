@@ -88,6 +88,22 @@ impl Tokens {
             .await
     }
 
+    /// [`buyer_quality`](Self::buyer_quality) with query options
+    /// (`GET /rhc/tokens/{address}/buyer-quality`, BASIC+; `include_balances` PRO+).
+    ///
+    /// `include_balances: Some(true)` adds `dump_cluster_held_now`: the early
+    /// buyers counted in `dump_cluster_count` and their CURRENT balances. The
+    /// base response is unchanged.
+    pub async fn buyer_quality_with(
+        &self,
+        address: &str,
+        params: &BuyerQualityParams,
+    ) -> Result<BuyerQualityResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/buyer-quality", address), params)
+            .await
+    }
+
     /// Launch-bundle detection (`GET /rhc/tokens/{address}/bundle`, BASIC+).
     ///
     /// Ranks the first 20 distinct buyers by on-chain order, flags a bundle when
@@ -99,6 +115,79 @@ impl Tokens {
     pub async fn bundle(&self, address: &str) -> Result<RhcBundleResponse> {
         self.core
             .get(&format!("/rhc/tokens/{}/bundle", address), &())
+            .await
+    }
+
+    /// [`bundle`](Self::bundle) with query options
+    /// (`GET /rhc/tokens/{address}/bundle`, BASIC+; `include_balances` PRO+).
+    ///
+    /// `include_balances: Some(true)` adds `held_now` (the cohort's CURRENT
+    /// `balanceOf(token)` from one Multicall3 batch on our node) and
+    /// `balance_now` per disclosed wallet. Totals only when every cohort wallet
+    /// was read; an `unverified` read never means zero.
+    pub async fn bundle_with(
+        &self,
+        address: &str,
+        params: &BundleParams,
+    ) -> Result<RhcBundleResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/bundle", address), params)
+            .await
+    }
+
+    /// Share of supply held NOW by every bundle wallet
+    /// (`GET /rhc/tokens/{address}/bundle-share`, PRO+).
+    ///
+    /// ONE figure, `bundled_pct_of_supply_now` (a ratio in [0, 1]): the launch
+    /// bundle plus every wallet of a coordinated buy cluster in the window (see
+    /// [`bundles`](Self::bundles)), each wallet counted once, read with
+    /// `balanceOf` from our node. `None` unless every wallet could be read.
+    /// Cached 30 s per token (`as_of`). `scope: launch_cohort_only` means only
+    /// the launch bundle could be counted.
+    pub async fn bundle_share(
+        &self,
+        address: &str,
+        params: &BundleShareParams,
+    ) -> Result<BundleShareResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/bundle-share", address), params)
+            .await
+    }
+
+    /// Every coordinated buy cluster in a window, launch AND later
+    /// (`GET /rhc/tokens/{address}/bundles`, PRO+).
+    ///
+    /// Every block where ≥ `min_wallets` distinct effective trading accounts
+    /// (ERC-4337 senders resolved) bought the token. Per cluster: block, time,
+    /// `phase` (`launch` = within 5 minutes of `launch_at`), wallets,
+    /// `new_wallets`, ETH volume, `token_volume_raw` (uint256 string), and the
+    /// `exit` sell ledger when bundle-watch followed it. [`bundle`](Self::bundle)
+    /// remains the launch-cohort view. `include_balances` adds `held_now` to the
+    /// 3 most recent clusters.
+    pub async fn bundles(
+        &self,
+        address: &str,
+        params: &BundleClustersParams,
+    ) -> Result<BundleClustersResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/bundles", address), params)
+            .await
+    }
+
+    /// Every stored KOL trade on one token, newest first
+    /// (`GET /rhc/tokens/{address}/kol-trades`, BASIC+; `include_balances` PRO+).
+    ///
+    /// Keyset paged with `next_cursor` / exact `has_more`. Same tier depth as
+    /// the KOL feed (BASIC: 5-minute delay, 20 rows). `include_balances` adds
+    /// `balances.by_wallet`: `balanceOf(token)` per KOL address on the page from
+    /// our node; a failed read is `unverified` with a `reason`, never a zero.
+    pub async fn kol_trades(
+        &self,
+        address: &str,
+        params: &TokenKolTradesParams,
+    ) -> Result<TokenKolTradesResponse> {
+        self.core
+            .get(&format!("/rhc/tokens/{}/kol-trades", address), params)
             .await
     }
 

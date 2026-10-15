@@ -172,6 +172,29 @@ impl DeployerHunter {
             .await
     }
 
+    /// A developer's launches and own-token buys/sells as one timeline
+    /// (`GET /rhc/deployer-hunter/{address}/activity`, PRO+).
+    ///
+    /// Events: `launch`, `dev_buy`, `dev_sell` (trades of the developer's own
+    /// tokens by the developer address itself, ERC-4337 senders resolved).
+    /// `event_id` equals the `rhc:dev_activity` WebSocket id. Newest first,
+    /// keyset paged with `next_cursor`; `coverage.scan_truncated` says where the
+    /// bounded trade scan stopped (never a false end). Window: `since`, default
+    /// 30 days, at most 90. Not included (v1): developer token transfers and
+    /// other wallets of the same person.
+    pub async fn activity(
+        &self,
+        address: &str,
+        params: &DeployerActivityParams,
+    ) -> Result<DeployerActivityResponse> {
+        self.core
+            .get(
+                &format!("/rhc/deployer-hunter/{}/activity", address),
+                params,
+            )
+            .await
+    }
+
     /// Recent graduations (`GET /rhc/deployer-hunter/recent-bonds`, BASIC+).
     ///
     /// Tokens that crossed the $40K peak-MC graduation milestone, newest peak

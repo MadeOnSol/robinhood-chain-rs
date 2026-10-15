@@ -37,6 +37,38 @@ impl Kol {
         self.core.get("/rhc/kol/leaderboard", params).await
     }
 
+    /// KOL win-rate leaderboard
+    /// (`GET /rhc/kol/leaderboard?sort=winrate_7d|winrate_30d`, PRO+).
+    ///
+    /// Ranks KOLs by FIFO win rate: the share of fully closed positions (last
+    /// sell in the window) with positive realized PnL, from precomputed scores
+    /// (the same numbers and `data_fingerprint` as `/rhc/wallet/{address}/pnl`).
+    /// KOLs with fewer than `min_closed` closed positions, or without a fresh
+    /// score, are not ranked. A 503 means the scores are stale, not that the
+    /// ranking is empty. The rows differ from [`leaderboard`](Self::leaderboard)
+    /// (no activity counts), hence the separate method.
+    pub async fn winrate_leaderboard(
+        &self,
+        params: &KolWinrateLeaderboardParams,
+    ) -> Result<KolWinrateLeaderboardResponse> {
+        self.core.get("/rhc/kol/leaderboard", params).await
+    }
+
+    /// Scout KOL leaderboard (`GET /rhc/kol/scouts/leaderboard`, PRO+).
+    ///
+    /// A first touch is a KOL buy of a token no KOL bought before. Per KOL:
+    /// first touches in the last 30 days (at least 4 h old), average other-KOL
+    /// followers within 4 h, and the share that drew ≥ 3 / ≥ 5
+    /// (`swarm_3plus_pct` / `swarm_5plus_pct`). Identity is the KOL, not the
+    /// address (`evm_addresses` lists them). `scout_tier` is `None` below 30
+    /// first touches. A 503 `scout_scores_unavailable` is never an empty ranking.
+    pub async fn scouts_leaderboard(
+        &self,
+        params: &ScoutLeaderboardParams,
+    ) -> Result<ScoutLeaderboardResponse> {
+        self.core.get("/rhc/kol/scouts/leaderboard", params).await
+    }
+
     /// Consensus hot-tokens — bought by 2+ KOLs (`GET /rhc/kol/hot-tokens`, BASIC+).
     pub async fn hot_tokens(&self, params: &HotTokensParams) -> Result<HotTokensResponse> {
         self.core.get("/rhc/kol/hot-tokens", params).await

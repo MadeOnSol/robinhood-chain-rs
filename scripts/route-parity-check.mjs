@@ -4,7 +4,7 @@
  * Robinhood Chain API surface.
  *
  * This standalone crate is NOT scanned by the monorepo's sdk-route-parity guard,
- * so it ships its own. The 60 `/rhc/*` paths (5 of them aliases) — carrying 69 operations, because
+ * so it ships its own. The 65 `/rhc/*` paths (5 of them aliases) — carrying 74 operations, because
  * the ten rule-engine paths each serve several HTTP methods — are pinned below
  * (from the "MadeOnSol — Robinhood Chain API" OpenAPI spec). The check:
  *
@@ -23,7 +23,7 @@ import path from "node:path";
 
 const SRC = process.env.SRC_DIR || "src";
 
-// The 60 documented Robinhood Chain paths, normalized ({param} -> :p).
+// The 65 documented Robinhood Chain paths, normalized ({param} -> :p).
 const RHC_ROUTES = [
   "/rhc/alpha-wallets",
   "/rhc/alpha/leaderboard",
@@ -31,6 +31,7 @@ const RHC_ROUTES = [
   "/rhc/copytrade/subscriptions",
   "/rhc/copytrade/subscriptions/:p",
   "/rhc/deployer-hunter/:p",
+  "/rhc/deployer-hunter/:p/activity",
   "/rhc/deployer-hunter/:p/history",
   "/rhc/deployer-hunter/:p/tokens",
   "/rhc/deployer-hunter/:p/trajectory",
@@ -50,6 +51,7 @@ const RHC_ROUTES = [
   "/rhc/kol/first-touches/subscriptions/:p",
   "/rhc/kol/hot-tokens",
   "/rhc/kol/leaderboard",
+  "/rhc/kol/scouts/leaderboard",
   "/rhc/kol/tokens/hot",
   "/rhc/lp-events",
   "/rhc/price-alerts",
@@ -60,12 +62,15 @@ const RHC_ROUTES = [
   "/rhc/tokens",
   "/rhc/tokens/:p",
   "/rhc/tokens/:p/bundle",
+  "/rhc/tokens/:p/bundle-share",
+  "/rhc/tokens/:p/bundles",
   "/rhc/tokens/:p/buyer-quality",
   "/rhc/tokens/:p/candles",
   "/rhc/tokens/:p/early-buyers",
   "/rhc/tokens/:p/flow",
   "/rhc/tokens/:p/holders",
   "/rhc/tokens/:p/kol-consensus",
+  "/rhc/tokens/:p/kol-trades",
   "/rhc/tokens/:p/lp-events",
   "/rhc/tokens/:p/locks",
   "/rhc/tokens/:p/peak-history",
