@@ -4970,10 +4970,69 @@ pub struct TokenRiskAssessment {
     pub status: String,
     #[serde(default)]
     pub unknown_inputs: Vec<String>,
+    /// Checks not run for this token (e.g. `lp_custody` on a non-v2 pool).
+    #[serde(default)]
+    pub not_assessed: Vec<String>,
+    /// Why each unknown / not-assessed input is listed.
+    #[serde(default)]
+    pub explanations: std::collections::HashMap<String, String>,
+}
+
+/// One side of [`TokenTaxes`]. Raw amounts are uint256 decimal strings.
+/// `tax_bps: None` = not measured, never 0 by default.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenTaxSide {
+    /// `measured` | `unknown` | `not_assessed`.
+    pub status: String,
+    #[serde(default)]
+    pub tax_bps: Option<i64>,
+    /// Token amount put into the transfer.
+    #[serde(default)]
+    pub amount_in_raw: Option<String>,
+    /// sell: tokens the pair received. buy: tokens the buyer's balance grew by.
+    #[serde(default)]
+    pub amount_received_raw: Option<String>,
+    /// WETH pairs only, Router02 quote at the same block (wei).
+    #[serde(default)]
+    pub estimated_weth_raw: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Buy/sell tax measured on the token's uniswap-v2 pair at one block
+/// (simulated token transfers with the real router / pair as caller). Present
+/// only when the server enables it. Holds for that amount and block; not part
+/// of `score`. Other venues: `not_assessed`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenTaxes {
+    /// `measured` (both sides) | `unknown` | `not_assessed`.
+    pub status: String,
+    #[serde(default)]
+    pub buy_tax_bps: Option<i64>,
+    /// 10000 = a sell delivers nothing to the pair.
+    #[serde(default)]
+    pub sell_tax_bps: Option<i64>,
+    #[serde(default)]
+    pub venue: Option<String>,
+    #[serde(default)]
+    pub pool: Option<String>,
+    #[serde(default)]
+    pub block: Option<i64>,
+    /// `eth_simulateV1_transfer`.
+    #[serde(default)]
+    pub method: Option<String>,
+    pub buy: TokenTaxSide,
+    pub sell: TokenTaxSide,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Body of `GET /rhc/tokens/{address}/risk`. Absent capability flags are the
-/// norm on this chain and are not a safety guarantee.
+/// norm on this chain and are not a safety guarantee. `score` is a
+/// contract-capability + sellability check, NOT trading risk: holders, deployer
+/// share, bots, taxes and depth do not move it. `band`, `top10_pct`,
+/// `deployer_pct`, `transfer_fee_bps` and `bot_dominated` are Solana-only; use
+/// the holders route (`concentration`, nested ratios 0-1) and buyer-quality.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenRiskResponse {
     pub chain: String,
@@ -5004,6 +5063,15 @@ pub struct TokenRiskResponse {
     /// 0–100, conservative. Absence of evidence is not evidence of safety.
     #[serde(default)]
     pub score: Option<i64>,
+    /// Present only with `taxes` (server-enabled); `None` = absent or not measured.
+    #[serde(default)]
+    pub buy_tax_bps: Option<i64>,
+    /// Present only with `taxes` (server-enabled); `None` = absent or not measured.
+    #[serde(default)]
+    pub sell_tax_bps: Option<i64>,
+    /// Buy/sell tax block; `None` while the server does not measure taxes.
+    #[serde(default)]
+    pub taxes: Option<TokenTaxes>,
     #[serde(default)]
     pub assessment: Option<TokenRiskAssessment>,
     #[serde(default)]

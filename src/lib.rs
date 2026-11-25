@@ -589,6 +589,30 @@ mod tests {
         })).unwrap();
         assert_eq!(risk.assessment.unwrap().unknown_inputs, vec!["observed_sells".to_string()]);
         assert!(risk.score.is_none());
+        assert!(risk.taxes.is_none() && risk.buy_tax_bps.is_none() && risk.sell_tax_bps.is_none());
+
+        // Server-flagged tax block (RHC_TAX_SIM=on): 1 % buy, 100 % sell.
+        let taxed: types::TokenRiskResponse = serde_json::from_value(serde_json::json!({
+            "chain":"robinhood","token_address":"0xt","flags":[],"score":100,
+            "buy_tax_bps":100,"sell_tax_bps":10000,
+            "taxes":{"status":"measured","buy_tax_bps":100,"sell_tax_bps":10000,"venue":"uniswap-v2","pool":"0xp","block":100,
+                "method":"eth_simulateV1_transfer",
+                "buy":{"status":"measured","tax_bps":100,"amount_in_raw":"1000","amount_received_raw":"990","estimated_weth_raw":"5","reason":null},
+                "sell":{"status":"measured","tax_bps":10000,"amount_in_raw":"1000","amount_received_raw":"0","estimated_weth_raw":null,"reason":null},
+                "reason":null},
+            "assessment":{"status":"complete","unknown_inputs":[],"not_assessed":["lp_custody"],"explanations":{"lp_custody":"v3"}}
+        })).unwrap();
+        let t = taxed.taxes.unwrap();
+        assert_eq!(
+            (t.buy_tax_bps, t.sell_tax_bps, taxed.sell_tax_bps),
+            (Some(100), Some(10000), Some(10000))
+        );
+        assert_eq!(t.sell.amount_received_raw.as_deref(), Some("0"));
+        assert!(t.sell.estimated_weth_raw.is_none());
+        assert_eq!(
+            taxed.assessment.unwrap().not_assessed,
+            vec!["lp_custody".to_string()]
+        );
 
         let holders: types::HoldersResponse = serde_json::from_value(serde_json::json!({
             "chain":"robinhood","token_address":"0xt","verified":true,"unverified_reason":null,

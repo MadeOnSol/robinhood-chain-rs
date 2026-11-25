@@ -272,6 +272,11 @@ impl Tokens {
     /// all) is a different answer from `"renounced"`, and `lp_custody` is read only
     /// for uniswap-v2 pools (v3/v4 LP sits in an NFT and reports `"unknown"`).
     ///
+    /// `score` is a contract-capability + sellability check, not trading risk:
+    /// holders, bots, taxes and depth do not move it. Buy/sell tax arrives as
+    /// `taxes` + `buy_tax_bps` / `sell_tax_bps` once the server enables it
+    /// (absent = not measured, `null` = unknown, never 0).
+    ///
     /// Returns raw JSON; for typed access deserialize it with
     /// `serde_json::from_value::<crate::types::TokenRiskResponse>(value)`.
     pub async fn risk(&self, address: &str) -> Result<serde_json::Value> {
