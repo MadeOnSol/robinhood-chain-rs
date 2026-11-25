@@ -596,7 +596,7 @@ mod tests {
             "chain":"robinhood","token_address":"0xt","flags":[],"score":100,
             "buy_tax_bps":100,"sell_tax_bps":10000,
             "taxes":{"status":"measured","buy_tax_bps":100,"sell_tax_bps":10000,"venue":"uniswap-v2","pool":"0xp","block":100,
-                "method":"eth_simulateV1_transfer",
+                "method":"eth_simulateV1_router_swap",
                 "buy":{"status":"measured","tax_bps":100,"amount_in_raw":"1000","amount_received_raw":"990","estimated_weth_raw":"5","reason":null},
                 "sell":{"status":"measured","tax_bps":10000,"amount_in_raw":"1000","amount_received_raw":"0","estimated_weth_raw":null,"reason":null},
                 "reason":null},

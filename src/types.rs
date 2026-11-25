@@ -4986,13 +4986,13 @@ pub struct TokenTaxSide {
     pub status: String,
     #[serde(default)]
     pub tax_bps: Option<i64>,
-    /// Token amount put into the transfer.
+    /// sell: tokens the wallet sold; buy: tokens the pair sent out.
     #[serde(default)]
     pub amount_in_raw: Option<String>,
     /// sell: tokens the pair received. buy: tokens the buyer's balance grew by.
     #[serde(default)]
     pub amount_received_raw: Option<String>,
-    /// WETH pairs only, Router02 quote at the same block (wei).
+    /// Native ETH in wei from the same simulated swap: sell = received, buy = paid.
     #[serde(default)]
     pub estimated_weth_raw: Option<String>,
     #[serde(default)]
@@ -5000,7 +5000,7 @@ pub struct TokenTaxSide {
 }
 
 /// Buy/sell tax measured on the token's uniswap-v2 pair at one block
-/// (simulated token transfers with the real router / pair as caller). Present
+/// (one real Router02 swap per side from a fresh wallet). Present
 /// only when the server enables it. Holds for that amount and block; not part
 /// of today's `score` (risk v2 scores it). Other venues: `not_assessed`.
 #[derive(Debug, Clone, Deserialize)]
@@ -5018,7 +5018,7 @@ pub struct TokenTaxes {
     pub pool: Option<String>,
     #[serde(default)]
     pub block: Option<i64>,
-    /// `eth_simulateV1_transfer`.
+    /// `eth_simulateV1_router_swap`.
     #[serde(default)]
     pub method: Option<String>,
     pub buy: TokenTaxSide,
