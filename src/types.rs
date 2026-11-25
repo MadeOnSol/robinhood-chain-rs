@@ -5002,7 +5002,7 @@ pub struct TokenTaxSide {
 /// Buy/sell tax measured on the token's uniswap-v2 pair at one block
 /// (simulated token transfers with the real router / pair as caller). Present
 /// only when the server enables it. Holds for that amount and block; not part
-/// of `score`. Other venues: `not_assessed`.
+/// of today's `score` (risk v2 scores it). Other venues: `not_assessed`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenTaxes {
     /// `measured` (both sides) | `unknown` | `not_assessed`.
@@ -5028,10 +5028,12 @@ pub struct TokenTaxes {
 }
 
 /// Body of `GET /rhc/tokens/{address}/risk`. Absent capability flags are the
-/// norm on this chain and are not a safety guarantee. `score` is a
-/// contract-capability + sellability check, NOT trading risk: holders, deployer
-/// share, bots, taxes and depth do not move it. `band`, `top10_pct`,
-/// `deployer_pct`, `transfer_fee_bps` and `bot_dominated` are Solana-only; use
+/// norm on this chain and are not a safety guarantee. Today `score` (higher is
+/// better) covers contract capabilities and sellability only: holders, deployer,
+/// LP removals, bots, taxes and depth do not move it yet. Risk v2 makes it the
+/// full safety score (colour, alerts) and keeps the contract-only value as
+/// `contract_score`. `band`, `top10_pct`, `deployer_pct`, `transfer_fee_bps`
+/// and `bot_dominated` are not present yet; use
 /// the holders route (`concentration`, nested ratios 0-1) and buyer-quality.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenRiskResponse {
