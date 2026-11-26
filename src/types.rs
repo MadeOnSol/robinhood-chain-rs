@@ -5042,6 +5042,14 @@ pub struct TokenTaxSide {
     pub route_fee_source: Option<TokenRouteFeeSource>,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Optional `"synthetic_fresh_wallet"` when this side is `measured` from a
+    /// swap simulated by a fresh synthetic wallet; `None` for declared (Flap),
+    /// unknown and not_assessed sides. A measured 0 stays `Some(0)`.
+    /// The outcome holds for the tested wallet, route, amount and block: a
+    /// fresh test wallet cannot see owner-set per-wallet blocks, allow/deny
+    /// lists, holding-time, launch-age or volume limits, or later rate changes.
+    #[serde(default)]
+    pub wallet_scope: Option<String>,
 }
 
 /// Buy/sell tax measured on the token's own venue at one block (one real
@@ -5105,7 +5113,13 @@ pub struct TokenRiskResponse {
     /// `{ primary_pool, dex, lp_custody, lp_burned_pct, last_removed_at }`.
     #[serde(default)]
     pub liquidity: Option<serde_json::Value>,
-    /// `{ sellable: yes|no|unknown, reason }`.
+    /// `{ sellable: yes|no|unknown, reason, simulation }`. `simulation.wallet_scope`
+    /// is `"synthetic_fresh_wallet"` when the sell call really executed from a
+    /// fresh synthetic wallet (absent otherwise): a `yes` does not prove an
+    /// existing holder can sell. The outcome holds for the tested wallet, route,
+    /// amount and block: a fresh test wallet cannot see owner-set per-wallet
+    /// blocks, allow/deny lists, holding-time, launch-age or volume limits, or
+    /// later rate changes.
     #[serde(default)]
     pub sellability: Option<serde_json::Value>,
     #[serde(default)]
