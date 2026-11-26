@@ -4978,14 +4978,51 @@ pub struct TokenRiskAssessment {
     pub explanations: std::collections::HashMap<String, String>,
 }
 
+/// A tax rate the token declares on chain (today Flap tokens) and where it was read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenTaxDeclared {
+    pub tax_bps: i64,
+    /// The token contract whose getter (or pinned implementation) was read.
+    pub contract: String,
+    /// The helper contract read alongside the token (Flap TaxTokenHelper), if any.
+    #[serde(default)]
+    pub helper: Option<String>,
+    pub block: i64,
+}
+
+/// Simulation and declaration differ by more than 50 bps: both kept, side `unknown`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenTaxConflict {
+    pub simulated_tax_bps: i64,
+    pub declared_tax_bps: i64,
+}
+
+/// Who took `route_fee_bps`: `kind` = `uniswap_v4_hook` | `launchpad_fee`, full address.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenRouteFeeSource {
+    pub kind: String,
+    pub address: String,
+}
+
 /// One side of [`TokenTaxes`]. Raw amounts are uint256 decimal strings.
 /// `tax_bps: None` = not measured, never 0 by default.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenTaxSide {
-    /// `measured` | `unknown` | `not_assessed`.
+    /// `measured` (a reconciling simulated swap) | `declared` (read from the
+    /// token contract; never proves what a trader pays, a declared 0 is not a
+    /// measured 0) | `unknown` | `not_assessed`.
     pub status: String,
     #[serde(default)]
     pub tax_bps: Option<i64>,
+    /// `simulated` | `declared_onchain`; `None` = no route ran (or an older server).
+    #[serde(default)]
+    pub basis: Option<String>,
+    /// The declared on-chain rate when one was read.
+    #[serde(default)]
+    pub declared: Option<TokenTaxDeclared>,
+    /// Present when simulation and declaration disagree by more than 50 bps.
+    #[serde(default)]
+    pub conflict: Option<TokenTaxConflict>,
     /// sell: tokens the wallet sold; buy: tokens the pair sent out.
     #[serde(default)]
     pub amount_in_raw: Option<String>,
@@ -4995,17 +5032,28 @@ pub struct TokenTaxSide {
     /// Native ETH in wei from the same simulated swap: sell = received, buy = paid.
     #[serde(default)]
     pub estimated_weth_raw: Option<String>,
+    /// Fee the route took outside the token's tax (a uniswap-v4 hook or a
+    /// launchpad curve), bps of the side's base. `Some(0)` = proven nothing
+    /// taken; `None` = no such fee on this route, or not measured. Pool LP
+    /// fees are never route fees.
+    #[serde(default)]
+    pub route_fee_bps: Option<i64>,
+    #[serde(default)]
+    pub route_fee_source: Option<TokenRouteFeeSource>,
     #[serde(default)]
     pub reason: Option<String>,
 }
 
-/// Buy/sell tax measured on the token's uniswap-v2 pair at one block
-/// (one real Router02 swap per side from a fresh wallet). Present
-/// only when the server enables it. Holds for that amount and block; not part
-/// of today's `score` (risk v2 scores it). Other venues: `not_assessed`.
+/// Buy/sell tax measured on the token's own venue at one block (one real
+/// swap per side from a fresh wallet on uniswap-v2 / v3 / v4 / pons-v2 /
+/// bags / hood.fun; Flap rates as declared on chain). Present only when the
+/// server enables it. Holds for that amount, block and a fresh wallet; not
+/// part of today's `score` (risk v2 scores it). Venues without a proven
+/// route: `unknown` ("route not fixture-proven").
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenTaxes {
-    /// `measured` (both sides) | `unknown` | `not_assessed`.
+    /// `measured` (both sides) | `declared` (both sides carry a value, at
+    /// least one declared) | `unknown` | `not_assessed`.
     pub status: String,
     #[serde(default)]
     pub buy_tax_bps: Option<i64>,
@@ -5018,7 +5066,7 @@ pub struct TokenTaxes {
     pub pool: Option<String>,
     #[serde(default)]
     pub block: Option<i64>,
-    /// `eth_simulateV1_router_swap`.
+    /// `eth_simulateV1_router_swap` | `onchain_declaration` (declared rates only).
     #[serde(default)]
     pub method: Option<String>,
     pub buy: TokenTaxSide,
